@@ -202,13 +202,12 @@ function updatePlayerPhysics(p) {
 }
 
 function updatePlayerAI(p) {
-  if(throwInState) {
-    if(throwInState.thrower === p.id) {
-      moveToward(p, throwInState.x, throwInState.y, p.spd * 0.06);
-      if(dist(p.x, p.y, throwInState.x, throwInState.y) < 20 && !p.hasBall) {
-        p.hasBall = true; ball.x = p.x; ball.y = p.y; ball.z = 45;
-        setTimeout(() => { if(throwInState) { possession = throwInState.team; throwInState = null; shotClock = 24; } }, 500);
-      }
+  // スローイン時：スロワーは指定位置へ、他の選手は通常通り動く
+  if(throwInState && throwInState.thrower === p.id) {
+    moveToward(p, throwInState.x, throwInState.y, p.spd * 0.06);
+    if(dist(p.x, p.y, throwInState.x, throwInState.y) < 20 && !p.hasBall) {
+      p.hasBall = true; ball.x = p.x; ball.y = p.y; ball.z = 45;
+      setTimeout(() => { if(throwInState) { possession = throwInState.team; throwInState = null; shotClock = 24; } }, 500);
     }
     return;
   }
@@ -224,17 +223,7 @@ function updatePlayerAI(p) {
     let dToGoal = dist(p.x,p.y,tg.x,tg.y);
     let dominated = players.filter(d => d.team !== p.team && dist(d.x,d.y,p.x,p.y) < 40).length >= 2;
     let teammates = players.filter(t => t.team===p.team && t.id!==p.id);
-    
-    // バックパス判断: プレッシャーを受けている、または良いパスコースがある
-    if(dominated || (dToGoal < 120 && random() < 0.02)) {
-      let backTarget = teammates.find(t => {
-        let isBack = p.team === "PlayerTeam" ? t.x < p.x - 50 : t.x > p.x + 50;
-        let isFree = players.filter(d => d.team !== p.team).every(d => dist(d.x,d.y,t.x,t.y) > 40);
-        return isBack && isFree;
-      });
-      if(backTarget) { passTo(p, backTarget); return; }
-    }
-    
+
     // 通常パス
     let openMate = teammates.find(t => {
       let isFree = players.filter(d => d.team !== p.team).every(d => dist(d.x,d.y,t.x,t.y) > 45);
@@ -398,6 +387,8 @@ function checkGoal(side, net) {
   let d = dist(ball.x, ball.y, rx, finalGoal.ringY);
   if(ball.vz < 0 && ball.z < finalGoal.ringZ && ball.z > finalGoal.ringZ - 20 && d < finalGoal.ringSize / 1.1) {
     net.offsetX = ball.vx * 1.5; net.swing = 10; net.phase = 0;
+    // 網による減速
+    ball.vz *= 0.65;
     if(!goalChecked && ball.z < finalGoal.ringZ - 5) {
       let pts = ball.is3pt ? 3 : 2;
       if(side === 1) scorePlayer += pts; else scoreDefender += pts;
