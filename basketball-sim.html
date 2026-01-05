@@ -8,7 +8,7 @@ body { margin: 0; display: flex; flex-direction: column; align-items: center; mi
 #container { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 #stats { display: flex; gap: 15px; color: #fff; font-size: 11px; }
 .stat-box { background: rgba(255,255,255,0.1); padding: 6px 10px; border-radius: 6px; }
-#roster { display: flex; gap: 20px; margin-top: 8px; width: 800px; }
+#roster { display: flex; gap: 20px; margin-top: 8px; width: 1000px; }
 .team-roster { flex: 1; background: rgba(255,255,255,0.05); border-radius: 8px; padding: 8px; }
 .team-roster h3 { margin: 0 0 8px 0; font-size: 12px; text-align: center; }
 .team-roster.blue h3 { color: #0af; }
@@ -33,11 +33,11 @@ body { margin: 0; display: flex; flex-direction: column; align-items: center; mi
 </div>
 </div>
 <script>
-const court = {tl:{x:140,y:200},tr:{x:660,y:200},br:{x:790,y:450},bl:{x:10,y:450}};
-const cCircle = {centerCircleW:120,centerCircleH:58,centerCircleY:311};
-const p7 = [{x:667,y:215},{x:592,y:223},{x:533,y:253},{x:514,y:314},{x:567,y:383},{x:660,y:417},{x:776,y:426}];
-const paintData = {paintPoints:[{x:698,y:274},{x:730,y:336},{x:575,y:329},{x:567,y:285}],ftCircle:{x:572,y:307,w:90,h:43}};
-let finalGoal = {ringX:689,ringY:305,ringZ:95,ringSize:25,poleBaseX:716,poleBaseY:276,board:[{x:720,y:277},{x:720,y:326},{x:695,y:296},{x:695,y:255}]};
+const court = {tl:{x:175,y:250},tr:{x:825,y:250},br:{x:987.5,y:562.5},bl:{x:12.5,y:562.5}};
+const cCircle = {centerCircleW:150,centerCircleH:72.5,centerCircleY:388.75};
+const p7 = [{x:833.75,y:268.75},{x:740,y:278.75},{x:666.25,y:316.25},{x:642.5,y:392.5},{x:708.75,y:478.75},{x:825,y:521.25},{x:970,y:532.5}];
+const paintData = {paintPoints:[{x:872.5,y:342.5},{x:912.5,y:420},{x:718.75,y:411.25},{x:708.75,y:356.25}],ftCircle:{x:715,y:383.75,w:112.5,h:53.75}};
+let finalGoal = {ringX:861.25,ringY:381.25,ringZ:95,ringSize:25,poleBaseX:895,poleBaseY:345,board:[{x:900,y:346.25},{x:900,y:407.5},{x:868.75,y:370},{x:868.75,y:318.75}]};
 
 let players = [], ball, scorePlayer = 0, scoreDefender = 0, goalChecked = false;
 let gameTime = 720, quarter = 1, shotClock = 24, possession = null;
@@ -48,10 +48,10 @@ let netRight = {offsetX:0,swing:0,phase:0}, netLeft = {offsetX:0,swing:0,phase:0
 const positions = ["PG","SG","SF","PF","C"];
 
 function setup() {
-  let c = createCanvas(800, 600);
+  let c = createCanvas(1000, 750);
   c.parent('game');
   initPlayers();
-  ball = {x:400,y:311,z:0,vx:0,vy:0,vz:0,trail:[],lastTouch:"PlayerTeam",passTarget:null};
+  ball = {x:500,y:388.75,z:0,vx:0,vy:0,vz:0,trail:[],lastTouch:"PlayerTeam",passTarget:null};
   players[0].hasBall = true; possession = "PlayerTeam";
   buildRosterUI();
 }
@@ -71,7 +71,7 @@ function initPlayers() {
       blk: pos==="C"?80:pos==="PF"?65:40,
       jmp: pos==="SF"?75:pos==="SG"?70:60,
       stamina: 100, maxStamina: 100,
-      x: team==="PlayerTeam" ? 150+i*30 : 650-((i-5)*30), y: 280+((i%5)*35), z: 0, vz: 0,
+      x: team==="PlayerTeam" ? 187.5+i*37.5 : 812.5-((i-5)*37.5), y: 350+((i%5)*43.75), z: 0, vz: 0,
       hasBall: false, lock: 0, isJumping: false, size: 25,
       state: "idle", dribblePhase: 0, mustShoot: false,
       moveTarget: null, actionQueue: []
@@ -214,8 +214,8 @@ function updatePlayerAI(p) {
   if(p.lock > 0) { p.lock--; }
   
   let isOffense = p.team === possession;
-  let tg = p.team === "PlayerTeam" ? {x:finalGoal.ringX,y:finalGoal.ringY} : {x:800-finalGoal.ringX,y:finalGoal.ringY};
-  let og = p.team === "PlayerTeam" ? {x:800-finalGoal.ringX,y:finalGoal.ringY} : {x:finalGoal.ringX,y:finalGoal.ringY};
+  let tg = p.team === "PlayerTeam" ? {x:finalGoal.ringX,y:finalGoal.ringY} : {x:1000-finalGoal.ringX,y:finalGoal.ringY};
+  let og = p.team === "PlayerTeam" ? {x:1000-finalGoal.ringX,y:finalGoal.ringY} : {x:finalGoal.ringX,y:finalGoal.ringY};
   let speed = p.spd * 0.045 * (p.stamina/p.maxStamina * 0.4 + 0.6);
 
   if(p.hasBall && p.lock <= 0) {
@@ -254,13 +254,13 @@ function updatePlayerAI(p) {
       let ang = atan2(p.y-handler.y, p.x-handler.x);
       let tx = handler.x + cos(ang)*100 + random(-15,15);
       let ty = handler.y + sin(ang)*100 + random(-15,15);
-      moveToward(p, constrain(tx,100,700), constrain(ty,220,430), speed*0.6);
+      moveToward(p, constrain(tx,125,875), constrain(ty,275,537.5), speed*0.6);
     }
   } else if(!isOffense) {
     p.state = "defense";
     let handler = players.find(pl=>pl.hasBall);
-    let retreatX = p.team === "PlayerTeam" ? 200 : 600;
-    let inPos = p.team === "PlayerTeam" ? p.x < 350 : p.x > 450;
+    let retreatX = p.team === "PlayerTeam" ? 250 : 750;
+    let inPos = p.team === "PlayerTeam" ? p.x < 437.5 : p.x > 562.5;
     
     if(!inPos && handler) moveToward(p, retreatX, p.y, speed);
     else if(handler) {
@@ -281,8 +281,8 @@ function updatePlayerAI(p) {
 
 function moveToward(p, tx, ty, spd) {
   let a = atan2(ty-p.y, tx-p.x);
-  p.x = constrain(p.x + cos(a)*spd, 20, 780);
-  p.y = constrain(p.y + sin(a)*spd, 210, 440);
+  p.x = constrain(p.x + cos(a)*spd, 25, 975);
+  p.y = constrain(p.y + sin(a)*spd, 262.5, 550);
 }
 
 function passTo(passer, receiver) {
@@ -320,11 +320,11 @@ function attemptSteal(stealer, handler) {
 function shotClockViolation() {
   let newTeam = possession === "PlayerTeam" ? "DefenderTeam" : "PlayerTeam";
   let holder = players.find(p=>p.hasBall); if(holder) holder.hasBall = false;
-  let thX = possession === "PlayerTeam" ? 750 : 50;
+  let thX = possession === "PlayerTeam" ? 937.5 : 62.5;
   let thrower = players.find(p => p.team === newTeam && p.position === "PG");
-  throwInState = { team: newTeam, x: thX, y: 325, reason: "SHOT CLOCK VIOLATION", thrower: thrower ? thrower.id : (newTeam==="PlayerTeam"?0:5) };
+  throwInState = { team: newTeam, x: thX, y: 406.25, reason: "SHOT CLOCK VIOLATION", thrower: thrower ? thrower.id : (newTeam==="PlayerTeam"?0:5) };
   ball.vx = 0; ball.vy = 0; ball.vz = 0;
-  addFloatingText(400, 280, "24 SEC VIOLATION", [255,100,100]);
+  addFloatingText(500, 350, "24 SEC VIOLATION", [255,100,100]);
 }
 
 function startThrowIn(team, x, y, reason) {
@@ -335,9 +335,9 @@ function startThrowIn(team, x, y, reason) {
 }
 
 function checkRebound(side) {
-  let rx = side === 1 ? finalGoal.ringX : 800 - finalGoal.ringX, ry = finalGoal.ringY, rz = finalGoal.ringZ, rs = finalGoal.ringSize / 2;
-  let boardX = side === 1 ? 715 : 85;
-  if(ball.x > boardX - 12 && ball.x < boardX + 12 && ball.y > 230 && ball.y < 375 && ball.z < 180 && ball.z > 60) {
+  let rx = side === 1 ? finalGoal.ringX : 1000 - finalGoal.ringX, ry = finalGoal.ringY, rz = finalGoal.ringZ, rs = finalGoal.ringSize / 2;
+  let boardX = side === 1 ? 893.75 : 106.25;
+  if(ball.x > boardX - 12 && ball.x < boardX + 12 && ball.y > 287.5 && ball.y < 468.75 && ball.z < 180 && ball.z > 60) {
     ball.vx = -ball.vx * BOUNCE_FACTOR; ball.x = ball.x > boardX ? boardX + 13 : boardX - 13;
     ball.vz *= 0.9; ball.vy *= 0.9;
   }
@@ -369,12 +369,12 @@ function updatePhysics() {
     checkRebound(1); checkRebound(-1);
     
     let oob = false, thX = ball.x, thY = ball.y;
-    if(ball.y < 200 || ball.y > 450) { oob = true; thY = ball.y < 200 ? 205 : 445; thX = constrain(ball.x, 50, 750); }
-    if(ball.x < 10 || ball.x > 790) { oob = true; thX = ball.x < 10 ? 15 : 785; thY = constrain(ball.y, 220, 430); }
+    if(ball.y < 250 || ball.y > 562.5) { oob = true; thY = ball.y < 250 ? 256.25 : 556.25; thX = constrain(ball.x, 62.5, 937.5); }
+    if(ball.x < 12.5 || ball.x > 987.5) { oob = true; thX = ball.x < 12.5 ? 18.75 : 981.25; thY = constrain(ball.y, 275, 537.5); }
     if(oob && ball.z < 30) {
       let newTeam = ball.lastTouch === "PlayerTeam" ? "DefenderTeam" : "PlayerTeam";
       startThrowIn(newTeam, thX, thY, "OUT OF BOUNDS");
-      addFloatingText(400, 300, "OUT OF BOUNDS", [255,255,255]);
+      addFloatingText(500, 375, "OUT OF BOUNDS", [255,255,255]);
     }
   }
   netRight.offsetX *= NET_DAMPING; netRight.swing *= NET_DAMPING; netRight.phase += 0.08;
@@ -383,7 +383,7 @@ function updatePhysics() {
 }
 
 function checkGoal(side, net) {
-  let rx = side === 1 ? finalGoal.ringX : 800 - finalGoal.ringX;
+  let rx = side === 1 ? finalGoal.ringX : 1000 - finalGoal.ringX;
   let d = dist(ball.x, ball.y, rx, finalGoal.ringY);
   if(ball.vz < 0 && ball.z < finalGoal.ringZ && ball.z > finalGoal.ringZ - 20 && d < finalGoal.ringSize / 1.1) {
     net.offsetX = ball.vx * 1.5; net.swing = 10; net.phase = 0;
@@ -396,8 +396,8 @@ function checkGoal(side, net) {
       for(let i=0;i<30;i++) particles.push({x:rx,y:finalGoal.ringY,vx:random(-5,5),vy:random(-5,5),life:60,color:side===1?[0,150,255]:[255,50,50]});
       addFloatingText(rx, finalGoal.ringY - 50, ball.is3pt ? "+3!" : "+2!", side===1?[0,200,255]:[255,100,100]);
       let newTeam = side === 1 ? "DefenderTeam" : "PlayerTeam";
-      let thX = side === 1 ? 780 : 20;
-      setTimeout(() => startThrowIn(newTeam, thX, 325, "INBOUND"), 1000);
+      let thX = side === 1 ? 975 : 25;
+      setTimeout(() => startThrowIn(newTeam, thX, 406.25, "INBOUND"), 1000);
     }
   }
 }
@@ -432,22 +432,22 @@ function drawCourtAndBackboard() {
   fill(180,150,110); stroke(255); strokeWeight(3);
   beginShape(); for(let pt of [court.tl,court.tr,court.br,court.bl]) vertex(pt.x,pt.y); endShape(CLOSE);
   stroke(255,200,0,100); strokeWeight(4);
-  drawSpline(p7); drawSpline(p7.map(pt=>({x:800-pt.x,y:pt.y})));
+  drawSpline(p7); drawSpline(p7.map(pt=>({x:1000-pt.x,y:pt.y})));
   noFill(); stroke(255); strokeWeight(2);
-  line(400,200,400,450);
-  ellipse(400, cCircle.centerCircleY, cCircle.centerCircleW, cCircle.centerCircleH);
+  line(500,250,500,562.5);
+  ellipse(500, cCircle.centerCircleY, cCircle.centerCircleW, cCircle.centerCircleH);
   drawPaintSet(1); drawPaintSet(-1);
   stroke(255); strokeWeight(2);
-  drawSpline(p7); drawSpline(p7.map(pt=>({x:800-pt.x,y:pt.y})));
+  drawSpline(p7); drawSpline(p7.map(pt=>({x:1000-pt.x,y:pt.y})));
   renderBackboardAndPole(1); renderBackboardAndPole(-1);
 }
 
 function drawPaintSet(side) {
-  let pts = paintData.paintPoints.map(pt => side===1 ? pt : {x:800-pt.x,y:pt.y});
+  let pts = paintData.paintPoints.map(pt => side===1 ? pt : {x:1000-pt.x,y:pt.y});
   stroke(255); strokeWeight(2); fill(180,100,100,30);
   beginShape(); for(let pt of pts) vertex(pt.x,pt.y); endShape(CLOSE);
   noFill();
-  let cX = side===1 ? paintData.ftCircle.x : 800-paintData.ftCircle.x;
+  let cX = side===1 ? paintData.ftCircle.x : 1000-paintData.ftCircle.x;
   arc(cX, paintData.ftCircle.y, paintData.ftCircle.w, paintData.ftCircle.h, side===1?HALF_PI:-HALF_PI, side===1?-HALF_PI:HALF_PI);
 }
 
@@ -458,9 +458,9 @@ function drawSpline(pts) {
 }
 
 function renderBackboardAndPole(side) {
-  let g = finalGoal, rx = side===1 ? g.poleBaseX : 800-g.poleBaseX;
+  let g = finalGoal, rx = side===1 ? g.poleBaseX : 1000-g.poleBaseX;
   stroke(100); strokeWeight(5); line(rx,g.poleBaseY,rx,g.poleBaseY-95);
-  let bPts = g.board.map(pt=>({x:side===1?pt.x:800-pt.x,y:pt.y-95}));
+  let bPts = g.board.map(pt=>({x:side===1?pt.x:1000-pt.x,y:pt.y-95}));
   fill(255,220); stroke(255); strokeWeight(2);
   beginShape(); for(let pt of bPts) vertex(pt.x,pt.y); endShape(CLOSE);
 }
@@ -486,7 +486,7 @@ function drawNetGemini(rx,ry,rz,net,isBack) {
 }
 
 function renderGoalBack(side, net) {
-  let g = finalGoal, rx = side===1 ? g.ringX : 800-g.ringX;
+  let g = finalGoal, rx = side===1 ? g.ringX : 1000-g.ringX;
   noStroke(); fill(0,40); ellipse(rx,g.ringY,g.ringSize,g.ringSize*0.4);
   stroke(255,50,50); strokeWeight(3); noFill();
   arc(rx, g.ringY-g.ringZ, g.ringSize, g.ringSize*0.4, PI, TWO_PI);
@@ -494,7 +494,7 @@ function renderGoalBack(side, net) {
 }
 
 function renderGoalFront(side, net) {
-  let g = finalGoal, rx = side===1 ? g.ringX : 800-g.ringX;
+  let g = finalGoal, rx = side===1 ? g.ringX : 1000-g.ringX;
   stroke(255,50,50); strokeWeight(3); noFill();
   arc(rx, g.ringY-g.ringZ, g.ringSize, g.ringSize*0.4, 0, PI);
   drawNetGemini(rx, g.ringY, g.ringZ, net, false);
