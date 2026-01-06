@@ -52,6 +52,8 @@ let netRight = {offsetX:0,swing:0,phase:0}, netLeft = {offsetX:0,swing:0,phase:0
 let quarterScoresPlayer = [0, 0, 0, 0];
 let quarterScoresDefender = [0, 0, 0, 0];
 let lastScorePlayer = 0, lastScoreDefender = 0;
+// ジャンプボール状態
+let jumpBallState = null;
 const positions = ["PG","SG","SF","PF","C"];
 const SPEED_WALK = 0.3, SPEED_JOG = 0.6, SPEED_RUN = 1.0, SPEED_SPRINT = 1.5;
 
@@ -60,8 +62,8 @@ function setup() {
   c.parent('game');
   initPlayers();
   ball = {x:500,y:388.75,z:0,vx:0,vy:0,vz:0,trail:[],lastTouch:"PlayerTeam",passTarget:null};
-  players[0].hasBall = true; possession = "PlayerTeam";
   buildRosterUI();
+  startJumpBall(); // ゲーム開始時はジャンプボール
 }
 
 function initPlayers() {
@@ -194,7 +196,9 @@ function buildRosterUI() {
 
 function draw() {
   background(40,40,60);
-  if (frameCount % 60 === 0 && gameState === "playing" && !throwInState) {
+
+  // ジャンプボール中は時間を止める
+  if (frameCount % 60 === 0 && gameState === "playing" && !throwInState && !jumpBallState) {
     gameTime--; shotClock--;
     if (shotClock <= 0) shotClockViolation();
     if (gameTime <= 0) { quarter++; gameTime = 720; if(quarter>4) gameState="end"; }
@@ -202,9 +206,14 @@ function draw() {
   updateUI();
   drawCourtAndBackboard();
   renderGoalBack(1, netRight); renderGoalBack(-1, netLeft);
-  
-  for (let i = 0; i < 2; i++) updatePhysics();
-  players.forEach(p => { updatePlayerAI(p); updatePlayerPhysics(p); });
+
+  // ジャンプボール処理
+  if(jumpBallState) {
+    updateJumpBall();
+  } else {
+    for (let i = 0; i < 2; i++) updatePhysics();
+    players.forEach(p => { updatePlayerAI(p); updatePlayerPhysics(p); });
+  }
   
   ball.trail.push({x:ball.x,y:ball.y,z:ball.z});
   if(ball.trail.length > 15) ball.trail.shift();
@@ -660,6 +669,97 @@ function startThrowIn(team, x, y, reason) {
   ball.vx = 0; ball.vy = 0; ball.vz = 0;
 }
 
+function startJumpBall() {
+  // 身長+ジャンプが最も高い選手を各チームから選出
+  let playerTeamJumper = players.filter(p => p.team === "PlayerTeam")
+    .sort((a, b) => (b.height + b.jmp) - (a.height + a.jmp))[0];
+  let defenderTeamJumper = players.filter(p => p.team === "DefenderTeam")
+    .sort((a, b) => (b.height + b.jmp) - (a.height + a.jmp))[0];
+
+  // ジャンプボール状態を設定
+  jumpBallState = {
+    jumper1: playerTeamJumper.id,
+    jumper2: defenderTeamJumper.id,
+    phase: 0, // 0=上昇中、1=最高点、2=落下中
+    timer: 0
+  };
+
+  // ボールを中央に配置
+  ball.x = 500;
+  ball.y = 388.75;
+  ball.z = 0;
+  ball.vx = 0;
+  ball.vy = 0;
+  ball.vz = 0;
+
+  addFloatingText(500, 350, "JUMP BALL!", [255, 255, 255]);
+}
+
+function updateJumpBall() {
+  if(!jumpBallState) return;
+
+  let j1 = players[jumpBallState.jumper1];
+  let j2 = players[jumpBallState.jumper2];
+
+  // ジャンパーをセンターサークルに配置
+  j1.x = 490;
+  j1.y = 388.75;
+  j2.x = 510;
+  j2.y = 388.75;
+
+  jumpBallState.timer++;
+
+  // ボールを上昇させる
+  if(jumpBallState.phase === 0) {
+    ball.z = jumpBallState.timer * 4;
+    if(ball.z > 120) {
+      jumpBallState.phase = 1;
+    }
+  }
+  // 最高点で選手がジャンプしてタッチ
+  else if(jumpBallState.phase === 1) {
+    j1.isJumping = true;
+    j2.isJumping = true;
+    j1.z = min(jumpBallState.timer - 30, 40);
+    j2.z = min(jumpBallState.timer - 30, 40);
+
+    if(jumpBallState.timer > 45) {
+      jumpBallState.phase = 2;
+      // どちらがボールを獲得するかは身長+ジャンプ力で判定
+      let j1Power = j1.height + j1.jmp + random(-10, 10);
+      let j2Power = j2.height + j2.jmp + random(-10, 10);
+      let winner = j1Power > j2Power ? j1 : j2;
+
+      // ボールをランダムな方向に弾く
+      let angle = random(0, TWO_PI);
+      ball.vx = cos(angle) * 3;
+      ball.vy = sin(angle) * 3;
+      ball.vz = -2;
+      ball.lastTouch = winner.team;
+    }
+  }
+  // ボールが落下して誰かが拾う
+  else if(jumpBallState.phase === 2) {
+    j1.z = max(0, j1.z - 2);
+    j2.z = max(0, j2.z - 2);
+    j1.isJumping = false;
+    j2.isJumping = false;
+
+    // ボールが地面に近づいたら最も近い選手が拾う
+    if(ball.z < 10 && !players.find(p => p.hasBall)) {
+      let nearest = players.reduce((closest, p) => {
+        let d = dist(p.x, p.y, ball.x, ball.y);
+        let closestD = dist(closest.x, closest.y, ball.x, ball.y);
+        return d < closestD ? p : closest;
+      });
+      nearest.hasBall = true;
+      possession = nearest.team;
+      shotClock = 24 * 60;
+      jumpBallState = null;
+    }
+  }
+}
+
 function checkRebound(side) {
   let rx = side === 1 ? finalGoal.ringX : 1000 - finalGoal.ringX, ry = finalGoal.ringY, rz = finalGoal.ringZ, rs = finalGoal.ringSize / 2;
 
@@ -690,13 +790,20 @@ function checkRebound(side) {
     let distToBoard = side === 1 ? ball.x - boardCenterX : boardCenterX - ball.x;
 
     if(abs(distToBoard) < 8) {
-      // 跳ね返り（X方向を反転）
-      ball.vx = -ball.vx * BOUNCE_FACTOR;
+      // 跳ね返り（コート内側に跳ね返す）
       ball.vz *= 0.85;
       ball.vy *= 0.9;
 
-      // ボールをバックボードの前に押し戻す
-      ball.x = side === 1 ? boardCenterX - 9 : boardCenterX + 9;
+      // ボールをバックボードの前（コート内側）に押し戻す
+      if(side === 1) {
+        // 右側のゴール：X速度を負（左向き、内側）に
+        ball.vx = -abs(ball.vx) * BOUNCE_FACTOR;
+        ball.x = boardCenterX - 9;
+      } else {
+        // 左側のゴール：X速度を正（右向き、内側）に
+        ball.vx = abs(ball.vx) * BOUNCE_FACTOR;
+        ball.x = boardCenterX + 9;
+      }
     }
   }
 
@@ -969,24 +1076,30 @@ function drawScoreboard() {
   fill(200, 200, 220);
   text("Q" + quarter, sbX, sbY + 8);
 
-  // クォーター別スコア（下部、小さく表示）
+  // クォーター別スコア（下部、横棒比較形式）
   textSize(7);
-  textAlign(LEFT, CENTER);
-  fill(150, 150, 160);
+  textAlign(CENTER, CENTER);
+  let quarterStartY = sbY + sbHeight/2 - 22;
+  let lineSpacing = 5;
 
-  // ブルーチームのクォーター別スコア
-  let blueQuarterY = sbY + sbHeight/2 - 10;
   for(let i = 0; i < 4; i++) {
-    let qColor = i === quarter - 1 ? [0, 255, 255] : [100, 150, 150];
-    fill(qColor[0], qColor[1], qColor[2]);
-    text(quarterScoresPlayer[i], sbX - 160 + i * 20, blueQuarterY);
-  }
+    let qY = quarterStartY + i * lineSpacing;
 
-  // レッドチームのクォーター別スコア
-  for(let i = 0; i < 4; i++) {
-    let qColor = i === quarter - 1 ? [255, 100, 100] : [150, 100, 100];
-    fill(qColor[0], qColor[1], qColor[2]);
-    text(quarterScoresDefender[i], sbX + 80 + i * 20, blueQuarterY);
+    // 中央の横棒（-）
+    fill(100, 100, 110);
+    text("-", sbX, qY);
+
+    // ブルーチーム（左側）
+    let blueColor = i === quarter - 1 ? [0, 255, 255] : [100, 150, 150];
+    fill(blueColor[0], blueColor[1], blueColor[2]);
+    textAlign(RIGHT, CENTER);
+    text(quarterScoresPlayer[i], sbX - 10, qY);
+
+    // レッドチーム（右側）
+    let redColor = i === quarter - 1 ? [255, 100, 100] : [150, 100, 100];
+    fill(redColor[0], redColor[1], redColor[2]);
+    textAlign(LEFT, CENTER);
+    text(quarterScoresDefender[i], sbX + 10, qY);
   }
 
   textFont('sans-serif');
@@ -1079,43 +1192,24 @@ function renderBackboardAndPole(side) {
   for(let pt of bPts) vertex(pt.x, pt.y);
   endShape(CLOSE);
 
-  // バックボードのウィンドウ（小さい四角）
+  // バックボードのウィンドウ（外枠を小さくした形）
   // パースペクティブを守った台形状のウィンドウ
   noFill();
   stroke(0, 0, 0);
   strokeWeight(2);
 
-  // ウィンドウの位置とサイズ（リングの真上）
-  let windowCenterY = g.board[0].y - 95 + (g.board[1].y - g.board[0].y) * 0.4;
-  let windowHeight = (g.board[1].y - g.board[0].y) * 0.25;
+  // ウィンドウは外枠を0.4倍に縮小したサイズ
+  let scale = 0.4;
+  let centerX = (bPts[0].x + bPts[1].x + bPts[2].x + bPts[3].x) / 4;
+  let centerY = (bPts[0].y + bPts[1].y + bPts[2].y + bPts[3].y) / 4;
 
-  // パースに合わせた台形のウィンドウ
-  let windowTopY = windowCenterY - windowHeight / 2;
-  let windowBottomY = windowCenterY + windowHeight / 2;
-
-  if(side === 1) {
-    // 右側のバックボード
-    let windowLeft = bPts[3].x + (bPts[0].x - bPts[3].x) * 0.3;
-    let windowRight = bPts[3].x + (bPts[0].x - bPts[3].x) * 0.7;
-
-    beginShape();
-    vertex(windowLeft, windowTopY);
-    vertex(windowRight, windowTopY);
-    vertex(windowRight, windowBottomY);
-    vertex(windowLeft, windowBottomY);
-    endShape(CLOSE);
-  } else {
-    // 左側のバックボード
-    let windowRight = bPts[3].x - (bPts[0].x - bPts[3].x) * 0.3;
-    let windowLeft = bPts[3].x - (bPts[0].x - bPts[3].x) * 0.7;
-
-    beginShape();
-    vertex(windowLeft, windowTopY);
-    vertex(windowRight, windowTopY);
-    vertex(windowRight, windowBottomY);
-    vertex(windowLeft, windowBottomY);
-    endShape(CLOSE);
+  beginShape();
+  for(let pt of bPts) {
+    let wx = centerX + (pt.x - centerX) * scale;
+    let wy = centerY + (pt.y - centerY) * scale;
+    vertex(wx, wy);
   }
+  endShape(CLOSE);
 
   // バックボードの反射光
   noStroke();
