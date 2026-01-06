@@ -70,8 +70,10 @@ function initPlayers() {
       stl: pos==="PG"?70:50,
       blk: pos==="C"?80:pos==="PF"?65:40,
       jmp: pos==="SF"?75:pos==="SG"?70:60,
-      stamina: 100, maxStamina: 100,
+      stamina: 100, maxStamina: 100, staminaDecay: 1.0,
       x: team==="PlayerTeam" ? 187.5+i*37.5 : 812.5-((i-5)*37.5), y: 350+((i%5)*43.75), z: 0, vz: 0,
+      prevX: team==="PlayerTeam" ? 187.5+i*37.5 : 812.5-((i-5)*37.5),
+      prevY: 350+((i%5)*43.75),
       hasBall: false, lock: 0, isJumping: false, size: 25,
       state: "idle", dribblePhase: 0, mustShoot: false,
       moveTarget: null, actionQueue: []
@@ -94,6 +96,7 @@ function buildRosterUI() {
       <span class="stat-label">PAS</span><input type="number" min="1" max="99" value="${p.pas}" data-id="${i}" data-stat="pas">
       <span class="stat-label">STL</span><input type="number" min="1" max="99" value="${p.stl}" data-id="${i}" data-stat="stl">
       <span class="stat-label">BLK</span><input type="number" min="1" max="99" value="${p.blk}" data-id="${i}" data-stat="blk">
+      <span class="stat-label">STM</span><input type="number" min="50" max="200" value="${p.maxStamina}" data-id="${i}" data-stat="maxStamina">
     `;
     container.appendChild(row);
   });
@@ -101,7 +104,12 @@ function buildRosterUI() {
     inp.addEventListener('change', e => {
       let id = parseInt(e.target.dataset.id);
       let stat = e.target.dataset.stat;
-      players[id][stat] = constrain(parseInt(e.target.value) || 50, 1, 99);
+      if(stat === 'maxStamina') {
+        players[id][stat] = constrain(parseInt(e.target.value) || 100, 50, 200);
+        players[id].stamina = min(players[id].stamina, players[id].maxStamina);
+      } else {
+        players[id][stat] = constrain(parseInt(e.target.value) || 50, 1, 99);
+      }
       e.target.value = players[id][stat];
     });
   });
@@ -197,8 +205,18 @@ function updatePlayerPhysics(p) {
     if(p.z <= 0) { p.z = 0; p.vz = 0; p.isJumping = false; p.mustShoot = false; }
   }
   if(p.hasBall && !p.isJumping) p.dribblePhase += 0.3;
-  if(p.state === "idle") p.stamina = min(p.maxStamina, p.stamina + 0.04);
-  else p.stamina = max(0, p.stamina - 0.03);
+
+  // スタミナの増減: 移動距離と時間ベース
+  let moveDist = dist(p.x, p.y, p.prevX, p.prevY);
+  p.prevX = p.x; p.prevY = p.y;
+
+  if(p.state === "idle") {
+    p.stamina = min(p.maxStamina, p.stamina + 0.08);
+  } else {
+    // 移動距離に応じて減少 (距離が大きいほど減少量が大きい)
+    let staminaCost = (0.005 + moveDist * 0.002) * p.staminaDecay;
+    p.stamina = max(0, p.stamina - staminaCost);
+  }
 }
 
 function updatePlayerAI(p) {
@@ -251,23 +269,50 @@ function updatePlayerAI(p) {
     p.state = "support";
     let handler = players.find(pl=>pl.hasBall);
     if(handler) {
-      let ang = atan2(p.y-handler.y, p.x-handler.x);
-      let tx = handler.x + cos(ang)*100 + random(-15,15);
-      let ty = handler.y + sin(ang)*100 + random(-15,15);
-      moveToward(p, constrain(tx,125,875), constrain(ty,275,537.5), speed*0.6);
+      // ゴールに近づきつつ、良いポジションを取る
+      let toGoalAng = atan2(tg.y - p.y, tg.x - p.x);
+      let spread = (p.id % 5) * (PI / 3) - PI / 3; // ポジションごとの角度分散
+
+      // ゴール方向に積極的に進む
+      let targetDist = dist(p.x, p.y, tg.x, tg.y);
+      let pushForward = targetDist > 150 ? 1.2 : 0.8; // 遠いほど積極的に前進
+
+      let tx = p.x + cos(toGoalAng + spread * 0.3) * speed * pushForward * 3;
+      let ty = p.y + sin(toGoalAng + spread * 0.3) * speed * pushForward * 3;
+
+      // ハンドラーから離れすぎないように調整
+      let distToHandler = dist(p.x, p.y, handler.x, handler.y);
+      if(distToHandler > 200) {
+        tx = lerp(tx, handler.x, 0.3);
+        ty = lerp(ty, handler.y, 0.3);
+      }
+
+      moveToward(p, constrain(tx,125,875), constrain(ty,275,537.5), speed*0.8);
     }
   } else if(!isOffense) {
     p.state = "defense";
     let handler = players.find(pl=>pl.hasBall);
     let retreatX = p.team === "PlayerTeam" ? 250 : 750;
     let inPos = p.team === "PlayerTeam" ? p.x < 437.5 : p.x > 562.5;
-    
+
     if(!inPos && handler) moveToward(p, retreatX, p.y, speed);
     else if(handler) {
+      // 同じポジションの相手選手をマーク
       let mark = players.filter(t=>t.team!==p.team)[p.id%5];
       if(mark) {
-        let mx = mark.x * 0.35 + og.x * 0.65, my = mark.y * 0.6 + og.y * 0.4;
-        moveToward(p, mx, my, speed*0.7);
+        // マークマンとゴールの中間、かつボール保持者を意識したポジショニング
+        let ballHandlerWeight = handler.id === mark.id ? 0.5 : 0.2;
+
+        // マークマン、ゴール、ボール保持者の3点を考慮
+        let defX = mark.x * 0.3 + og.x * 0.5 + handler.x * ballHandlerWeight;
+        let defY = mark.y * 0.3 + og.y * 0.5 + handler.y * ballHandlerWeight;
+
+        // 正規化
+        let totalWeight = 0.3 + 0.5 + ballHandlerWeight;
+        defX /= totalWeight;
+        defY /= totalWeight;
+
+        moveToward(p, defX, defY, speed*0.75);
         if(mark.hasBall && dist(p.x,p.y,mark.x,mark.y) < 30 && random(100) < p.stl * 0.06 && p.lock <= 0) attemptSteal(p, mark);
       }
     } else if(ball.z < 50 && !players.some(pl=>pl.hasBall)) {
