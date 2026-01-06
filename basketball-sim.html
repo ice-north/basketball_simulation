@@ -220,12 +220,35 @@ function updatePlayerPhysics(p) {
 }
 
 function updatePlayerAI(p) {
-  // スローイン時：スロワーは指定位置へ、他の選手は通常通り動く
+  // スローイン時：スロワーは指定位置へ、パスを出す。他の選手は受け取る位置へ
   if(throwInState && throwInState.thrower === p.id) {
     moveToward(p, throwInState.x, throwInState.y, p.spd * 0.06);
-    if(dist(p.x, p.y, throwInState.x, throwInState.y) < 20 && !p.hasBall) {
-      p.hasBall = true; ball.x = p.x; ball.y = p.y; ball.z = 45;
-      setTimeout(() => { if(throwInState) { possession = throwInState.team; throwInState = null; shotClock = 24; } }, 500);
+    if(dist(p.x, p.y, throwInState.x, throwInState.y) < 20) {
+      if(!p.hasBall) {
+        p.hasBall = true; ball.x = p.x; ball.y = p.y; ball.z = 45;
+      }
+      // ボールを持ったら、近くの味方にパスを出す
+      if(p.hasBall && frameCount % 60 > 30) {
+        let teammates = players.filter(t => t.team === p.team && t.id !== p.id);
+        let nearest = teammates.sort((a,b) => dist(p.x,p.y,a.x,a.y) - dist(p.x,p.y,b.x,b.y))[0];
+        if(nearest && dist(p.x, p.y, nearest.x, nearest.y) < 300) {
+          passTo(p, nearest);
+          setTimeout(() => { if(throwInState) { possession = throwInState.team; throwInState = null; shotClock = 24; } }, 500);
+        }
+      }
+    }
+    return;
+  }
+  // スローイン時：スロワー以外の味方は受け取りやすい位置へ
+  if(throwInState && p.team === throwInState.team && p.id !== throwInState.thrower) {
+    let thrower = players.find(pl => pl.id === throwInState.thrower);
+    if(thrower) {
+      // スロワーから適度な距離に移動
+      let ang = atan2(p.y - thrower.y, p.x - thrower.x);
+      let targetDist = 100 + (p.id % 3) * 30;
+      let tx = thrower.x + cos(ang) * targetDist;
+      let ty = thrower.y + sin(ang) * targetDist;
+      moveToward(p, constrain(tx, 125, 875), constrain(ty, 275, 537.5), p.spd * 0.04);
     }
     return;
   }
@@ -242,21 +265,51 @@ function updatePlayerAI(p) {
     let dominated = players.filter(d => d.team !== p.team && dist(d.x,d.y,p.x,p.y) < 40).length >= 2;
     let teammates = players.filter(t => t.team===p.team && t.id!==p.id);
 
-    // 通常パス
+    // 速攻判断：前方の敵味方の数を数える
+    let forwardRange = 200;
+    let enemiesForward = players.filter(d => {
+      if(d.team === p.team) return false;
+      let toEnemy = p.team === "PlayerTeam" ? d.x > p.x : d.x < p.x;
+      return toEnemy && dist(p.x, p.y, d.x, d.y) < forwardRange;
+    }).length;
+    let alliesForward = teammates.filter(t => {
+      let toGoal = p.team === "PlayerTeam" ? t.x > p.x : t.x < p.x;
+      return toGoal && dist(p.x, p.y, t.x, t.y) < forwardRange;
+    }).length;
+
+    let outnumbered = enemiesForward - alliesForward >= 2; // 数的不利
+
+    // 通常パス（PG優先）
     let openMate = teammates.find(t => {
       let isFree = players.filter(d => d.team !== p.team).every(d => dist(d.x,d.y,t.x,t.y) > 45);
       let closer = dist(t.x,t.y,tg.x,tg.y) < dToGoal - 30;
       return isFree && closer;
     });
+    // PGが近くにいてフリーなら優先的にパス
+    let pgMate = teammates.find(t => t.position === "PG" && dist(p.x, p.y, t.x, t.y) < 200);
+    if(pgMate && !openMate && p.position !== "PG" && random() < 0.02) {
+      let isFree = players.filter(d => d.team !== p.team).every(d => dist(d.x,d.y,pgMate.x,pgMate.y) > 40);
+      if(isFree) { passTo(p, pgMate); return; }
+    }
     if(openMate && random() < 0.015) { passTo(p, openMate); return; }
-    
+
+    // 数的不利の場合：味方を待つ（パスか安全な場所で待機）
+    if(outnumbered && dToGoal > 150) {
+      let safeMate = teammates.find(t => dist(p.x, p.y, t.x, t.y) < 150);
+      if(safeMate && random() < 0.03) { passTo(p, safeMate); return; }
+      // 後方で待機（ゆっくり移動）
+      let waitX = p.team === "PlayerTeam" ? p.x - 20 : p.x + 20;
+      moveToward(p, waitX, p.y, speed * 0.3);
+      return;
+    }
+
     // シュート
     if(dToGoal < 160 && random() < 0.025 && !p.isJumping) {
       p.isJumping = true; p.mustShoot = true;
       p.vz = sqrt(2 * map(p.jmp,0,100,50,100) * (BALL_GRAVITY * 0.5));
       return;
     }
-    
+
     // ドライブ
     let avoidX = 0, avoidY = 0;
     players.filter(d=>d.team!==p.team).forEach(d => {
@@ -269,25 +322,50 @@ function updatePlayerAI(p) {
     p.state = "support";
     let handler = players.find(pl=>pl.hasBall);
     if(handler) {
-      // ゴールに近づきつつ、良いポジションを取る
-      let toGoalAng = atan2(tg.y - p.y, tg.x - p.x);
-      let spread = (p.id % 5) * (PI / 3) - PI / 3; // ポジションごとの角度分散
+      // ポジション別の役割に基づいた位置取り
+      let pos = p.position;
+      let targetX, targetY;
 
-      // ゴール方向に積極的に進む
-      let targetDist = dist(p.x, p.y, tg.x, tg.y);
-      let pushForward = targetDist > 150 ? 1.2 : 0.8; // 遠いほど積極的に前進
+      if(pos === "PG") {
+        // PG: ボール運びをサポート、中盤での展開役
+        // ハンドラーの少し後方で展開
+        let backDist = 80;
+        let ang = atan2(handler.y - tg.y, handler.x - tg.x);
+        targetX = handler.x + cos(ang) * backDist;
+        targetY = handler.y + sin(ang) * backDist + random(-30, 30);
+      } else if(pos === "SG" || pos === "SF") {
+        // SG/SF: 3ポイントライン付近（ゴールから180-220px程度）
+        let idealDist = 190;
+        let currentDist = dist(p.x, p.y, tg.x, tg.y);
+        let ang = atan2(p.y - tg.y, p.x - tg.x);
 
-      let tx = p.x + cos(toGoalAng + spread * 0.3) * speed * pushForward * 3;
-      let ty = p.y + sin(toGoalAng + spread * 0.3) * speed * pushForward * 3;
+        // 3Pライン付近に移動しつつ、左右に展開
+        let spreadAng = pos === "SG" ? -PI/6 : PI/6;
+        targetX = tg.x + cos(ang + spreadAng) * idealDist;
+        targetY = tg.y + sin(ang + spreadAng) * idealDist;
+
+        // ハンドラーより前方を優先
+        if(p.team === "PlayerTeam" && targetX < handler.x) targetX = handler.x + 50;
+        if(p.team !== "PlayerTeam" && targetX > handler.x) targetX = handler.x - 50;
+      } else { // PF, C
+        // PF/C: ゴール近く（100-140px程度）でリバウンド・シュートを狙う
+        let idealDist = pos === "C" ? 100 : 120;
+        let ang = atan2(p.y - tg.y, p.x - tg.x);
+
+        // ペイントエリア付近に移動
+        let spreadAng = pos === "PF" ? PI/4 : -PI/4;
+        targetX = tg.x + cos(ang + spreadAng) * idealDist;
+        targetY = tg.y + sin(ang + spreadAng) * idealDist;
+      }
 
       // ハンドラーから離れすぎないように調整
       let distToHandler = dist(p.x, p.y, handler.x, handler.y);
-      if(distToHandler > 200) {
-        tx = lerp(tx, handler.x, 0.3);
-        ty = lerp(ty, handler.y, 0.3);
+      if(distToHandler > 250) {
+        targetX = lerp(targetX, handler.x, 0.4);
+        targetY = lerp(targetY, handler.y, 0.4);
       }
 
-      moveToward(p, constrain(tx,125,875), constrain(ty,275,537.5), speed*0.8);
+      moveToward(p, constrain(targetX,125,875), constrain(targetY,275,537.5), speed*0.8);
     }
   } else if(!isOffense) {
     p.state = "defense";
@@ -300,17 +378,31 @@ function updatePlayerAI(p) {
       // 同じポジションの相手選手をマーク
       let mark = players.filter(t=>t.team!==p.team)[p.id%5];
       if(mark) {
-        // マークマンとゴールの中間、かつボール保持者を意識したポジショニング
-        let ballHandlerWeight = handler.id === mark.id ? 0.5 : 0.2;
+        // ポジション別のディフェンス重点
+        let pos = p.position;
+        let markWeight, goalWeight, ballWeight;
+
+        if(pos === "PG" || pos === "SG") {
+          // PG/SG: マークマンとボール保持者を重視（外周のプレッシャー）
+          markWeight = 0.4;
+          goalWeight = 0.3;
+          ballWeight = handler.id === mark.id ? 0.5 : 0.3;
+        } else if(pos === "SF") {
+          // SF: バランス型
+          markWeight = 0.35;
+          goalWeight = 0.4;
+          ballWeight = handler.id === mark.id ? 0.5 : 0.25;
+        } else { // PF, C
+          // PF/C: ゴールとリバウンドを重視（ペイントエリア防衛）
+          markWeight = 0.25;
+          goalWeight = 0.6;
+          ballWeight = handler.id === mark.id ? 0.4 : 0.15;
+        }
 
         // マークマン、ゴール、ボール保持者の3点を考慮
-        let defX = mark.x * 0.3 + og.x * 0.5 + handler.x * ballHandlerWeight;
-        let defY = mark.y * 0.3 + og.y * 0.5 + handler.y * ballHandlerWeight;
-
-        // 正規化
-        let totalWeight = 0.3 + 0.5 + ballHandlerWeight;
-        defX /= totalWeight;
-        defY /= totalWeight;
+        let totalWeight = markWeight + goalWeight + ballWeight;
+        let defX = (mark.x * markWeight + og.x * goalWeight + handler.x * ballWeight) / totalWeight;
+        let defY = (mark.y * markWeight + og.y * goalWeight + handler.y * ballWeight) / totalWeight;
 
         moveToward(p, defX, defY, speed*0.75);
         if(mark.hasBall && dist(p.x,p.y,mark.x,mark.y) < 30 && random(100) < p.stl * 0.06 && p.lock <= 0) attemptSteal(p, mark);
