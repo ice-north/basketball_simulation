@@ -214,13 +214,32 @@ function updatePlayerPhysics(p) {
   if(p.state === "idle") {
     p.stamina = min(p.maxStamina, p.stamina + 0.08);
   } else {
-    // 移動距離に応じて減少 (距離が大きいほど減少量が大きい)
-    let staminaCost = (0.005 + moveDist * 0.002) * p.staminaDecay;
+    // 移動距離に応じて減少 (1/5に調整)
+    let staminaCost = (0.001 + moveDist * 0.0004) * p.staminaDecay;
     p.stamina = max(0, p.stamina - staminaCost);
   }
 }
 
 function updatePlayerAI(p) {
+  // ゴール後の守備帰陣：素早く自陣に戻る
+  if(p.returningToDefense) {
+    p.speedMultiplier = SPEED_SPRINT;
+    let pos = p.position;
+    let idealX, idealY;
+    if(pos === "PG" || pos === "SG") {
+      idealX = p.team === "PlayerTeam" ? 300 : 700;
+      idealY = pos === "PG" ? 350 : 420;
+    } else if(pos === "SF") {
+      idealX = p.team === "PlayerTeam" ? 250 : 750;
+      idealY = 388.75;
+    } else {
+      idealX = p.team === "PlayerTeam" ? 200 : 800;
+      idealY = pos === "PF" ? 340 : 430;
+    }
+    moveToward(p, idealX, idealY, p.spd * 0.045 * p.speedMultiplier);
+    return;
+  }
+
   // スローイン時：スロワーは指定位置へ、パスを出す。他の選手は受け取る位置へ
   if(throwInState && throwInState.thrower === p.id) {
     p.speedMultiplier = SPEED_JOG; // スローインは小走り
@@ -435,6 +454,13 @@ function updatePlayerAI(p) {
         let defX = (mark.x * markWeight + og.x * goalWeight + handler.x * ballWeight) / totalWeight;
         let defY = (mark.y * markWeight + og.y * goalWeight + handler.y * ballWeight) / totalWeight;
 
+        // 守備側は自陣から出ないように制限（相手コートに行かない）
+        if(p.team === "PlayerTeam") {
+          defX = min(defX, 480); // 青チームは左側に留まる
+        } else {
+          defX = max(defX, 520); // 赤チームは右側に留まる
+        }
+
         // マークマンとボール保持者に近い場合は全速力
         let distToMark = dist(p.x, p.y, mark.x, mark.y);
         if(mark.hasBall && distToMark > 50) {
@@ -494,7 +520,21 @@ function shoot(s, tx, ty, is3pt) {
   s.hasBall = false; s.mustShoot = false; goalChecked = false; s.lock = 60;
   let d = dist(s.x, s.y, tx, ty), t = map(d, 50, 300, 28, 45);
   let acc = is3pt ? s.tpt : s.sht;
-  let err = map(acc, 0, 100, 14, 1.5) * (s.stamina/s.maxStamina * 0.3 + 0.7);
+
+  // 距離に応じた難易度：近いほど簡単、遠いほど難しい
+  let distanceFactor = map(d, 50, 250, 1.0, 3.5); // 近距離1.0倍、遠距離3.5倍
+
+  // 3Pシュート時は能力が高いほど遠距離でも精度が高い
+  if(is3pt) {
+    let skillBonus = map(acc, 0, 100, 1.0, 0.3); // 能力が高いほど距離の影響を軽減
+    distanceFactor *= skillBonus;
+  }
+
+  // 最終的な誤差：能力、距離、スタミナを考慮
+  let baseErr = map(acc, 0, 100, 14, 1.5);
+  let staminaFactor = (s.stamina/s.maxStamina * 0.3 + 0.7);
+  let err = baseErr * distanceFactor * staminaFactor;
+
   ball.vx = (tx + (s.team==="PlayerTeam"?5:-5) + random(-err, err) - ball.x) / t;
   ball.vy = (ty + random(-err*0.4, err*0.4) - ball.y) / t;
   ball.vz = (finalGoal.ringZ - ball.z + 0.5 * BALL_GRAVITY * t * t) / t;
@@ -615,7 +655,18 @@ function checkGoal(side, net) {
       addFloatingText(rx, finalGoal.ringY - 50, ball.is3pt ? "+3!" : "+2!", side===1?[0,200,255]:[255,100,100]);
       let newTeam = side === 1 ? "DefenderTeam" : "PlayerTeam";
       let thX = side === 1 ? 975 : 25;
-      setTimeout(() => startThrowIn(newTeam, thX, 406.25, "INBOUND"), 1000);
+
+      // ゴール後：新しい守備側は素早く自陣に戻る
+      players.forEach(p => {
+        if(p.team === newTeam) {
+          p.returningToDefense = true;
+        }
+      });
+
+      setTimeout(() => {
+        startThrowIn(newTeam, thX, 406.25, "INBOUND");
+        players.forEach(p => p.returningToDefense = false);
+      }, 1000);
     }
   }
 }
