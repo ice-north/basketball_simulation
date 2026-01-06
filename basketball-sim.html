@@ -285,7 +285,7 @@ function updatePlayerPhysics(p) {
   if(p.isJumping) {
     p.vz -= BALL_GRAVITY * 0.5; p.z += p.vz;
     if(p.hasBall && p.mustShoot && p.vz <= 0) {
-      let tg = p.team === "PlayerTeam" ? {x:finalGoal.ringX,y:finalGoal.ringY} : {x:800-finalGoal.ringX,y:finalGoal.ringY};
+      let tg = p.team === "PlayerTeam" ? {x:finalGoal.ringX,y:finalGoal.ringY} : {x:1000-finalGoal.ringX,y:finalGoal.ringY};
       shoot(p, tg.x, tg.y, dist(p.x,p.y,tg.x,tg.y) > 180);
     }
     if(p.z <= 0) { p.z = 0; p.vz = 0; p.isJumping = false; p.mustShoot = false; }
@@ -390,18 +390,21 @@ function updatePlayerAI(p) {
 
     let outnumbered = enemiesForward - alliesForward >= 2; // 数的不利
 
-    // 通常パス（PG優先）
+    // PGへのパス優先（ボール運びの役割）
+    if(p.position !== "PG") {
+      let pgMate = teammates.find(t => t.position === "PG" && dist(p.x, p.y, t.x, t.y) < 250);
+      if(pgMate && random() < 0.025) {
+        let isFree = players.filter(d => d.team !== p.team).every(d => dist(d.x,d.y,pgMate.x,pgMate.y) > 40);
+        if(isFree) { passTo(p, pgMate); return; }
+      }
+    }
+
+    // 通常パス
     let openMate = teammates.find(t => {
       let isFree = players.filter(d => d.team !== p.team).every(d => dist(d.x,d.y,t.x,t.y) > 45);
       let closer = dist(t.x,t.y,tg.x,tg.y) < dToGoal - 30;
       return isFree && closer;
     });
-    // PGが近くにいてフリーなら優先的にパス
-    let pgMate = teammates.find(t => t.position === "PG" && dist(p.x, p.y, t.x, t.y) < 200);
-    if(pgMate && !openMate && p.position !== "PG" && random() < 0.02) {
-      let isFree = players.filter(d => d.team !== p.team).every(d => dist(d.x,d.y,pgMate.x,pgMate.y) > 40);
-      if(isFree) { passTo(p, pgMate); return; }
-    }
     if(openMate && random() < 0.015) { passTo(p, openMate); return; }
 
     // 数的不利の場合：味方を待つ（パスか安全な場所で待機）
@@ -414,8 +417,25 @@ function updatePlayerAI(p) {
       return;
     }
 
-    // シュート
-    if(dToGoal < 160 && random() < 0.025 && !p.isJumping) {
+    // ポジション別シュート判断
+    let shootDist = 160;
+    let shootChance = 0.025;
+
+    if(p.position === "SG") {
+      // SG: 積極的にスコアを狙う、3Pも得意
+      shootDist = 220;
+      shootChance = 0.035;
+    } else if(p.position === "SF") {
+      // SF: 中からも外からも得点
+      shootDist = 180;
+      shootChance = 0.03;
+    } else if(p.position === "C" || p.position === "PF") {
+      // C/PF: ゴール近くで確実に
+      shootDist = 130;
+      shootChance = 0.028;
+    }
+
+    if(dToGoal < shootDist && random() < shootChance && !p.isJumping) {
       p.isJumping = true; p.mustShoot = true;
       p.vz = sqrt(2 * map(p.jmp,0,100,50,100) * (BALL_GRAVITY * 0.5));
       return;
@@ -439,33 +459,58 @@ function updatePlayerAI(p) {
       let targetX, targetY;
 
       if(pos === "PG") {
-        // PG: ボール運びをサポート、中盤での展開役
-        // ハンドラーの少し後方で展開
+        // PG: ボール運びをサポート、中盤での展開役（コート上のコーチ）
+        // ハンドラーの少し後方で展開、パスコースを作る
         let backDist = 80;
         let ang = atan2(handler.y - tg.y, handler.x - tg.x);
         targetX = handler.x + cos(ang) * backDist;
         targetY = handler.y + sin(ang) * backDist + random(-30, 30);
-      } else if(pos === "SG" || pos === "SF") {
-        // SG/SF: 3ポイントライン付近（ゴールから180-220px程度）
-        let idealDist = 190;
-        let currentDist = dist(p.x, p.y, tg.x, tg.y);
+      } else if(pos === "SG") {
+        // SG: 積極的にスコアを狙う、3Pライン付近（180-220px）
+        let idealDist = 200;
         let ang = atan2(p.y - tg.y, p.x - tg.x);
 
-        // 3Pライン付近に移動しつつ、左右に展開
-        let spreadAng = pos === "SG" ? -PI/6 : PI/6;
+        // 3Pライン付近に移動、リバウンドにも飛び込める位置
+        let spreadAng = -PI/5;
         targetX = tg.x + cos(ang + spreadAng) * idealDist;
         targetY = tg.y + sin(ang + spreadAng) * idealDist;
 
         // ハンドラーより前方を優先
-        if(p.team === "PlayerTeam" && targetX < handler.x) targetX = handler.x + 50;
-        if(p.team !== "PlayerTeam" && targetX > handler.x) targetX = handler.x - 50;
-      } else { // PF, C
-        // PF/C: ゴール近く（100-140px程度）でリバウンド・シュートを狙う
-        let idealDist = pos === "C" ? 100 : 120;
+        if(p.team === "PlayerTeam" && targetX < handler.x) targetX = handler.x + 60;
+        if(p.team !== "PlayerTeam" && targetX > handler.x) targetX = handler.x - 60;
+      } else if(pos === "SF") {
+        // SF: オールラウンド、中からも外からも、身体を張る（150-180px）
+        let idealDist = 165;
         let ang = atan2(p.y - tg.y, p.x - tg.x);
 
-        // ペイントエリア付近に移動
-        let spreadAng = pos === "PF" ? PI/4 : -PI/4;
+        // 柔軟に動き、状況に応じてインサイド・アウトサイド
+        let spreadAng = PI/6;
+        targetX = tg.x + cos(ang + spreadAng) * idealDist;
+        targetY = tg.y + sin(ang + spreadAng) * idealDist;
+
+        // 前方を優先
+        if(p.team === "PlayerTeam" && targetX < handler.x) targetX = handler.x + 50;
+        if(p.team !== "PlayerTeam" && targetX > handler.x) targetX = handler.x - 50;
+      } else if(pos === "PF") {
+        // PF: インサイド・アウトサイドを行き来、柔軟（110-150px）
+        // 状況に応じて外にも出る
+        let idealDist = 130;
+        let ang = atan2(p.y - tg.y, p.x - tg.x);
+
+        // 時々外に出る（スクリーン、パス受け）
+        let goOut = frameCount % 300 < 100;
+        if(goOut) idealDist = 170;
+
+        let spreadAng = PI/4;
+        targetX = tg.x + cos(ang + spreadAng) * idealDist;
+        targetY = tg.y + sin(ang + spreadAng) * idealDist;
+      } else { // C
+        // C: ゴール下でプレー、パワープレー、リバウンド（80-110px）
+        let idealDist = 95;
+        let ang = atan2(p.y - tg.y, p.x - tg.x);
+
+        // ペイントエリア中心、ゴール下での存在感
+        let spreadAng = -PI/4;
         targetX = tg.x + cos(ang + spreadAng) * idealDist;
         targetY = tg.y + sin(ang + spreadAng) * idealDist;
       }
@@ -1044,9 +1089,9 @@ function drawGymnasiumFloor() {
 function drawScoreboard() {
   // スコアボードの位置（コート中央上部、奥側）
   let sbX = 500;
-  let sbY = 170;
-  let sbWidth = 420;
-  let sbHeight = 100;
+  let sbY = 165;
+  let sbWidth = 460;
+  let sbHeight = 110;
 
   // スコアボードの影
   noStroke();
@@ -1064,58 +1109,69 @@ function drawScoreboard() {
   noStroke();
   rect(sbX - sbWidth/2 + 5, sbY - sbHeight/2 + 5, sbWidth - 10, sbHeight - 10, 2);
 
-  // 大きなスコア表示（LED風、左右）
-  textSize(48);
-  textFont('monospace');
+  // 上部：チーム名と時間表示（RED 20:14 BLUE形式）
   textAlign(CENTER, CENTER);
+  textFont('sans-serif');
+  textSize(14);
 
-  // ブルーチームスコア（左側、大きく）
-  fill(0, 255, 255, 230);
-  stroke(0, 200, 200);
-  strokeWeight(2);
-  text(scorePlayer, sbX - 140, sbY - 8);
+  // RED（左）
+  fill(255, 100, 100);
+  text("RED", sbX - 120, sbY - 40);
 
-  // レッドチームスコア（右側、大きく）
+  // 時間表示（中央）
+  fill(200, 200, 220);
+  let minutes = floor(gameTime / 60);
+  let seconds = gameTime % 60;
+  text(minutes.toString().padStart(2, '0') + ":" + seconds.toString().padStart(2, '0'), sbX, sbY - 40);
+
+  // BLUE（右）
+  fill(0, 255, 255);
+  text("BLUE", sbX + 120, sbY - 40);
+
+  // 大きなスコア表示（LED風）
+  textSize(52);
+  textFont('monospace');
+
+  // REDスコア（左側、大きく）
   fill(255, 50, 50, 230);
   stroke(200, 40, 40);
   strokeWeight(2);
-  text(scoreDefender, sbX + 140, sbY - 8);
+  text(scoreDefender, sbX - 120, sbY + 5);
 
-  // 中央の矢印（←→）
-  textSize(20);
-  noStroke();
-  fill(150, 150, 160);
-  text("←  →", sbX, sbY - 8);
+  // BLUEスコア（右側、大きく）
+  fill(0, 255, 255, 230);
+  stroke(0, 200, 200);
+  strokeWeight(2);
+  text(scorePlayer, sbX + 10, sbY + 5);
 
-  // クォーター別スコア（中央下部、4列横並び）
-  textSize(9);
+  // 右側：クォーター別スコア（縦4行）
+  textSize(10);
   textFont('sans-serif');
-  textAlign(CENTER, CENTER);
+  noStroke();
 
-  let qStartX = sbX - 90;
-  let qSpacing = 60;
-  let qY = sbY + 30;
+  let qX = sbX + 150;
+  let qStartY = sbY - 20;
+  let qSpacing = 15;
 
   for(let i = 0; i < 4; i++) {
-    let qX = qStartX + i * qSpacing;
+    let qY = qStartY + i * qSpacing;
 
-    // クォーター番号
-    fill(120, 120, 130);
-    text("Q" + (i + 1), qX, qY - 8);
+    // REDスコア（左）
+    let redColor = i === quarter - 1 ? [255, 100, 100] : [150, 80, 80];
+    fill(redColor[0], redColor[1], redColor[2]);
+    textAlign(RIGHT, CENTER);
+    text(quarterScoresDefender[i], qX - 15, qY);
 
-    // ブルーチームスコア
+    // クォーター番号と横棒
+    fill(100, 100, 110);
+    textAlign(CENTER, CENTER);
+    text("-", qX, qY);
+
+    // BLUEスコア（右）
     let blueColor = i === quarter - 1 ? [0, 255, 255] : [80, 130, 130];
     fill(blueColor[0], blueColor[1], blueColor[2]);
-    text(quarterScoresPlayer[i], qX - 12, qY + 5);
-
-    // 中央の横棒
-    fill(100, 100, 110);
-    text("-", qX, qY + 5);
-
-    // レッドチームスコア
-    let redColor = i === quarter - 1 ? [255, 100, 100] : [130, 80, 80];
-    fill(redColor[0], redColor[1], redColor[2]);
-    text(quarterScoresDefender[i], qX + 12, qY + 5);
+    textAlign(LEFT, CENTER);
+    text(quarterScoresPlayer[i], qX + 15, qY);
   }
 
   textFont('sans-serif');
