@@ -48,6 +48,10 @@ let gameState = "playing", throwInState = null;
 let particles = [], floatingTexts = [];
 const NET_DAMPING = 0.85, BALL_GRAVITY = 0.45, BOUNCE_FACTOR = 0.72, AIR_RESISTANCE = 0.99;
 let netRight = {offsetX:0,swing:0,phase:0}, netLeft = {offsetX:0,swing:0,phase:0};
+// クォーターごとのスコア記録 [Q1, Q2, Q3, Q4]
+let quarterScoresPlayer = [0, 0, 0, 0];
+let quarterScoresDefender = [0, 0, 0, 0];
+let lastScorePlayer = 0, lastScoreDefender = 0;
 const positions = ["PG","SG","SF","PF","C"];
 const SPEED_WALK = 0.3, SPEED_JOG = 0.6, SPEED_RUN = 1.0, SPEED_SPRINT = 1.5;
 
@@ -658,11 +662,45 @@ function startThrowIn(team, x, y, reason) {
 
 function checkRebound(side) {
   let rx = side === 1 ? finalGoal.ringX : 1000 - finalGoal.ringX, ry = finalGoal.ringY, rz = finalGoal.ringZ, rs = finalGoal.ringSize / 2;
-  let boardX = side === 1 ? 893.75 : 106.25;
-  if(ball.x > boardX - 12 && ball.x < boardX + 12 && ball.y > 287.5 && ball.y < 468.75 && ball.z < 180 && ball.z > 60) {
-    ball.vx = -ball.vx * BOUNCE_FACTOR; ball.x = ball.x > boardX ? boardX + 13 : boardX - 13;
-    ball.vz *= 0.9; ball.vy *= 0.9;
+
+  // バックボードの正確な位置（パースを考慮）
+  let g = finalGoal;
+  let bPts = g.board.map(pt=>({x:side===1?pt.x:1000-pt.x, y:pt.y-95}));
+
+  // バックボードのX位置の範囲（左右の端）
+  let boardXMin = side === 1 ? bPts[3].x : bPts[0].x;
+  let boardXMax = side === 1 ? bPts[0].x : bPts[3].x;
+  let boardYMin = bPts[0].y;
+  let boardYMax = bPts[1].y;
+
+  // バックボードの中心X位置（跳ね返りの基準）
+  let boardCenterX = (boardXMin + boardXMax) / 2;
+
+  // バックボードとの衝突判定（ボールが正面から来た場合のみ）
+  let isApproachingFromFront = side === 1 ? ball.vx > 0 : ball.vx < 0;
+
+  if(isApproachingFromFront &&
+     ball.x > min(boardXMin, boardXMax) - 5 &&
+     ball.x < max(boardXMin, boardXMax) + 5 &&
+     ball.y > boardYMin - 5 &&
+     ball.y < boardYMax + 5 &&
+     ball.z > 60 && ball.z < 180) {
+
+    // バックボードの表面との衝突
+    let distToBoard = side === 1 ? ball.x - boardCenterX : boardCenterX - ball.x;
+
+    if(abs(distToBoard) < 8) {
+      // 跳ね返り（X方向を反転）
+      ball.vx = -ball.vx * BOUNCE_FACTOR;
+      ball.vz *= 0.85;
+      ball.vy *= 0.9;
+
+      // ボールをバックボードの前に押し戻す
+      ball.x = side === 1 ? boardCenterX - 9 : boardCenterX + 9;
+    }
   }
+
+  // リングとの衝突判定
   let d = dist(ball.x, ball.y, rx, ry);
   if(abs(ball.z - rz) < 12 && d > rs - 8 && d < rs + 10) {
     let ang = atan2(ball.y - ry, ball.x - rx), spH = sqrt(ball.vx*ball.vx + ball.vy*ball.vy);
@@ -737,7 +775,13 @@ function checkGoal(side, net) {
     ball.vz *= 0.65;
     if(!goalChecked && ball.z < finalGoal.ringZ - 5) {
       let pts = ball.is3pt ? 3 : 2;
-      if(side === 1) scorePlayer += pts; else scoreDefender += pts;
+      if(side === 1) {
+        scorePlayer += pts;
+        quarterScoresPlayer[quarter - 1] += pts;
+      } else {
+        scoreDefender += pts;
+        quarterScoresDefender[quarter - 1] += pts;
+      }
       goalChecked = true;
       for(let i=0;i<30;i++) particles.push({x:rx,y:finalGoal.ringY,vx:random(-5,5),vy:random(-5,5),life:60,color:side===1?[0,150,255]:[255,50,50]});
       addFloatingText(rx, finalGoal.ringY - 50, ball.is3pt ? "+3!" : "+2!", side===1?[0,200,255]:[255,100,100]);
@@ -866,8 +910,8 @@ function drawScoreboard() {
   // スコアボードの位置（コート中央上部、奥側）
   let sbX = 500;
   let sbY = 180; // コートの奥側
-  let sbWidth = 280;
-  let sbHeight = 70;
+  let sbWidth = 360;
+  let sbHeight = 85;
 
   // スコアボードの影
   noStroke();
@@ -889,38 +933,64 @@ function drawScoreboard() {
   textAlign(CENTER, CENTER);
   textSize(10);
   fill(200, 200, 220);
-  text("BLUE", sbX - 90, sbY - 20);
-  text("RED", sbX + 90, sbY - 20);
+  text("BLUE", sbX - 120, sbY - 28);
+  text("RED", sbX + 120, sbY - 28);
 
   // スコア表示（LED風）
-  textSize(32);
+  textSize(28);
   textFont('monospace');
 
   // ブルーチームスコア（左側、シアン）
   fill(0, 255, 255, 230);
   stroke(0, 200, 200);
   strokeWeight(1);
-  text(scorePlayer.toString().padStart(2, '0'), sbX - 90, sbY + 12);
+  text(scorePlayer.toString().padStart(2, '0'), sbX - 120, sbY + 2);
 
   // レッドチームスコア（右側、赤）
   fill(255, 50, 50, 230);
   stroke(200, 40, 40);
   strokeWeight(1);
-  text(scoreDefender.toString().padStart(2, '0'), sbX + 90, sbY + 12);
+  text(scoreDefender.toString().padStart(2, '0'), sbX + 120, sbY + 2);
 
   // 中央の区切り
   stroke(80, 80, 90);
   strokeWeight(2);
   line(sbX, sbY - sbHeight/2 + 10, sbX, sbY + sbHeight/2 - 10);
 
-  // 24秒タイマー（中央下部）
-  textSize(12);
+  // 24秒タイマー（中央上部）
+  textSize(11);
   fill(255, 200, 0, 200);
   noStroke();
   let shotTimer = max(0, 24 - floor(shotClock / 60));
-  text(shotTimer.toString().padStart(2, '0'), sbX, sbY + sbHeight/2 - 12);
+  text("SHOT: " + shotTimer.toString().padStart(2, '0'), sbX, sbY - 15);
+
+  // クォーター表示（中央）
+  textSize(10);
+  fill(200, 200, 220);
+  text("Q" + quarter, sbX, sbY + 8);
+
+  // クォーター別スコア（下部、小さく表示）
+  textSize(7);
+  textAlign(LEFT, CENTER);
+  fill(150, 150, 160);
+
+  // ブルーチームのクォーター別スコア
+  let blueQuarterY = sbY + sbHeight/2 - 10;
+  for(let i = 0; i < 4; i++) {
+    let qColor = i === quarter - 1 ? [0, 255, 255] : [100, 150, 150];
+    fill(qColor[0], qColor[1], qColor[2]);
+    text(quarterScoresPlayer[i], sbX - 160 + i * 20, blueQuarterY);
+  }
+
+  // レッドチームのクォーター別スコア
+  for(let i = 0; i < 4; i++) {
+    let qColor = i === quarter - 1 ? [255, 100, 100] : [150, 100, 100];
+    fill(qColor[0], qColor[1], qColor[2]);
+    text(quarterScoresDefender[i], sbX + 80 + i * 20, blueQuarterY);
+  }
 
   textFont('sans-serif');
+  textAlign(LEFT, TOP);
 }
 
 function drawPaintSet(side) {
@@ -991,8 +1061,8 @@ function renderBackboardAndPole(side) {
 
   // バックボードの厚み（側面）
   let bPts = g.board.map(pt=>({x:side===1?pt.x:1000-pt.x, y:pt.y-95}));
-  fill(200, 200, 210);
-  stroke(150, 150, 160);
+  fill(220, 220, 220);
+  stroke(100, 100, 100);
   strokeWeight(1);
   beginShape();
   vertex(bPts[0].x, bPts[0].y);
@@ -1001,29 +1071,55 @@ function renderBackboardAndPole(side) {
   vertex(bPts[3].x, bPts[3].y);
   endShape(CLOSE);
 
-  // バックボード本体（透明アクリル風）
-  fill(255, 255, 255, 180);
-  stroke(220, 220, 230);
+  // バックボード本体（白色）
+  fill(255, 255, 255);
+  stroke(0, 0, 0);
   strokeWeight(3);
   beginShape();
   for(let pt of bPts) vertex(pt.x, pt.y);
   endShape(CLOSE);
 
-  // バックボードのフレーム（赤い四角）
+  // バックボードのウィンドウ（小さい四角）
+  // パースペクティブを守った台形状のウィンドウ
   noFill();
-  stroke(255, 50, 50);
-  strokeWeight(2.5);
-  let frameMargin = 8;
-  rect(
-    bPts[3].x + (side===1 ? frameMargin : -frameMargin),
-    bPts[3].y + frameMargin,
-    (bPts[0].x - bPts[3].x) * (side===1 ? 1 : -1) - frameMargin * 2,
-    (bPts[1].y - bPts[0].y) - frameMargin * 2
-  );
+  stroke(0, 0, 0);
+  strokeWeight(2);
+
+  // ウィンドウの位置とサイズ（リングの真上）
+  let windowCenterY = g.board[0].y - 95 + (g.board[1].y - g.board[0].y) * 0.4;
+  let windowHeight = (g.board[1].y - g.board[0].y) * 0.25;
+
+  // パースに合わせた台形のウィンドウ
+  let windowTopY = windowCenterY - windowHeight / 2;
+  let windowBottomY = windowCenterY + windowHeight / 2;
+
+  if(side === 1) {
+    // 右側のバックボード
+    let windowLeft = bPts[3].x + (bPts[0].x - bPts[3].x) * 0.3;
+    let windowRight = bPts[3].x + (bPts[0].x - bPts[3].x) * 0.7;
+
+    beginShape();
+    vertex(windowLeft, windowTopY);
+    vertex(windowRight, windowTopY);
+    vertex(windowRight, windowBottomY);
+    vertex(windowLeft, windowBottomY);
+    endShape(CLOSE);
+  } else {
+    // 左側のバックボード
+    let windowRight = bPts[3].x - (bPts[0].x - bPts[3].x) * 0.3;
+    let windowLeft = bPts[3].x - (bPts[0].x - bPts[3].x) * 0.7;
+
+    beginShape();
+    vertex(windowLeft, windowTopY);
+    vertex(windowRight, windowTopY);
+    vertex(windowRight, windowBottomY);
+    vertex(windowLeft, windowBottomY);
+    endShape(CLOSE);
+  }
 
   // バックボードの反射光
   noStroke();
-  fill(255, 255, 255, 60);
+  fill(255, 255, 255, 40);
   beginShape();
   vertex(bPts[0].x, bPts[0].y);
   vertex(bPts[0].x + (bPts[1].x - bPts[0].x) * 0.3, bPts[0].y);
