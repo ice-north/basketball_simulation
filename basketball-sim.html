@@ -8,16 +8,19 @@ body { margin: 0; display: flex; flex-direction: column; align-items: center; mi
 #container { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 #stats { display: flex; gap: 15px; color: #fff; font-size: 11px; }
 .stat-box { background: rgba(255,255,255,0.1); padding: 6px 10px; border-radius: 6px; }
-#roster { display: flex; gap: 20px; margin-top: 8px; width: 1000px; }
+#roster { display: flex; gap: 20px; margin-top: 8px; width: 1000px; max-height: 600px; overflow-y: auto; }
 .team-roster { flex: 1; background: rgba(255,255,255,0.05); border-radius: 8px; padding: 8px; }
 .team-roster h3 { margin: 0 0 8px 0; font-size: 12px; text-align: center; }
 .team-roster.blue h3 { color: #0af; }
 .team-roster.red h3 { color: #f55; }
-.player-row { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; font-size: 10px; color: #fff; }
-.player-row label { width: 28px; font-weight: bold; }
-.player-row input { width: 38px; padding: 2px; border: none; border-radius: 3px; background: rgba(255,255,255,0.15); color: #fff; text-align: center; font-size: 9px; }
-.player-row input:focus { outline: 1px solid #0af; background: rgba(255,255,255,0.25); }
-.stat-label { font-size: 8px; color: #aaa; width: 22px; text-align: right; }
+.player-row { margin-bottom: 8px; font-size: 10px; color: #fff; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 6px; }
+.player-row .pos-label { font-weight: bold; margin-bottom: 4px; font-size: 11px; }
+.stat-category { font-size: 8px; color: #888; margin-top: 4px; margin-bottom: 2px; }
+.stat-line { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 2px; }
+.stat-item { display: flex; align-items: center; gap: 2px; }
+.stat-label { font-size: 7px; color: #aaa; min-width: 20px; text-align: right; }
+.stat-item input { width: 32px; padding: 2px; border: none; border-radius: 3px; background: rgba(255,255,255,0.15); color: #fff; text-align: center; font-size: 8px; }
+.stat-item input:focus { outline: 1px solid #0af; background: rgba(255,255,255,0.25); }
 </style>
 </head><body>
 <div id="container">
@@ -63,20 +66,51 @@ function initPlayers() {
     let pos = positions[i % 5];
     players[i] = {
       id: i, team, position: pos, number: i < 5 ? (i+1)*10 : (i-4)*10+1,
+
+      // 属性
       height: pos==="C" ? 210 : pos==="PF" ? 205 : pos==="SF" ? 200 : 190,
+
+      // フィジカル
+      power: pos==="C"?80:pos==="PF"?75:pos==="SF"?65:60,
       spd: pos==="PG"?90:pos==="SG"?85:pos==="C"?60:75,
+      acceleration: pos==="PG"?85:pos==="SG"?80:pos==="C"?50:70,
+      jmp: pos==="SF"?75:pos==="SG"?70:60,
+      balance: pos==="PG"?75:pos==="C"?80:70,
+      agility: pos==="PG"?85:pos==="SG"?80:pos==="C"?50:70,
+      stamina: 100,
+      maxStamina: 100,
+      recovery: pos==="PG"?70:pos==="C"?85:75,
+
+      // テクニカル
       sht: pos==="SG"?85:pos==="PG"?75:65,
       tpt: pos==="SG"?80:pos==="PG"?70:40,
+      dribble: pos==="PG"?85:pos==="SG"?75:pos==="C"?40:60,
       pas: pos==="PG"?85:60,
+      marking: pos==="PG"?60:pos==="SG"?65:pos==="C"?55:60,
+      rebound: pos==="C"?85:pos==="PF"?75:pos==="SF"?60:40,
       stl: pos==="PG"?70:50,
+      handling: pos==="PG"?85:pos==="SG"?75:pos==="C"?40:60,
+
+      // メンタル
+      workrate: pos==="PG"?80:pos==="C"?60:70,
+      vision: pos==="PG"?85:pos==="SG"?70:60,
+      teamwork: 70,
+      positioning: pos==="C"?80:pos==="PF"?75:pos==="PG"?75:70,
+      anticipation: pos==="PG"?75:pos==="SG"?70:65,
+      decisions: pos==="PG"?80:pos==="SG"?70:65,
+      aggression: pos==="C"?75:pos==="PF"?70:60,
+      reactions: pos==="PG"?80:pos==="SG"?75:70,
+
+      // ゲーム用
       blk: pos==="C"?80:pos==="PF"?65:40,
-      jmp: pos==="SF"?75:pos==="SG"?70:60,
-      stamina: 100, maxStamina: 100, staminaDecay: 1.0,
+      staminaDecay: 1.0,
       x: team==="PlayerTeam" ? 187.5+i*37.5 : 812.5-((i-5)*37.5), y: 350+((i%5)*43.75), z: 0, vz: 0,
       prevX: team==="PlayerTeam" ? 187.5+i*37.5 : 812.5-((i-5)*37.5),
       prevY: 350+((i%5)*43.75),
       hasBall: false, lock: 0, isJumping: false, size: 25,
-      state: "idle", dribblePhase: 0, mustShoot: false, speedMultiplier: SPEED_RUN,
+      state: "idle", dribblePhase: 0, mustShoot: false,
+      speedMultiplier: SPEED_RUN,
+      currentSpeed: 0, // 現在の速度（加速用）
       moveTarget: null, actionQueue: []
     };
   }
@@ -90,14 +124,50 @@ function buildRosterUI() {
     let row = document.createElement('div');
     row.className = 'player-row';
     row.innerHTML = `
-      <label>${p.position}</label>
-      <span class="stat-label">SPD</span><input type="number" min="1" max="99" value="${p.spd}" data-id="${i}" data-stat="spd">
-      <span class="stat-label">SHT</span><input type="number" min="1" max="99" value="${p.sht}" data-id="${i}" data-stat="sht">
-      <span class="stat-label">3PT</span><input type="number" min="1" max="99" value="${p.tpt}" data-id="${i}" data-stat="tpt">
-      <span class="stat-label">PAS</span><input type="number" min="1" max="99" value="${p.pas}" data-id="${i}" data-stat="pas">
-      <span class="stat-label">STL</span><input type="number" min="1" max="99" value="${p.stl}" data-id="${i}" data-stat="stl">
-      <span class="stat-label">BLK</span><input type="number" min="1" max="99" value="${p.blk}" data-id="${i}" data-stat="blk">
-      <span class="stat-label">STM</span><input type="number" min="50" max="200" value="${p.maxStamina}" data-id="${i}" data-stat="maxStamina">
+      <div class="pos-label">${p.position}</div>
+      <div class="stat-category">属性</div>
+      <div class="stat-line">
+        <div class="stat-item"><span class="stat-label">身長</span><input type="number" min="160" max="230" value="${p.height}" data-id="${i}" data-stat="height"></div>
+      </div>
+      <div class="stat-category">フィジカル</div>
+      <div class="stat-line">
+        <div class="stat-item"><span class="stat-label">パワー</span><input type="number" min="1" max="99" value="${p.power}" data-id="${i}" data-stat="power"></div>
+        <div class="stat-item"><span class="stat-label">スピード</span><input type="number" min="1" max="99" value="${p.spd}" data-id="${i}" data-stat="spd"></div>
+        <div class="stat-item"><span class="stat-label">瞬発力</span><input type="number" min="1" max="99" value="${p.acceleration}" data-id="${i}" data-stat="acceleration"></div>
+        <div class="stat-item"><span class="stat-label">ジャンプ</span><input type="number" min="1" max="99" value="${p.jmp}" data-id="${i}" data-stat="jmp"></div>
+      </div>
+      <div class="stat-line">
+        <div class="stat-item"><span class="stat-label">バランス</span><input type="number" min="1" max="99" value="${p.balance}" data-id="${i}" data-stat="balance"></div>
+        <div class="stat-item"><span class="stat-label">器用さ</span><input type="number" min="1" max="99" value="${p.agility}" data-id="${i}" data-stat="agility"></div>
+        <div class="stat-item"><span class="stat-label">スタミナ</span><input type="number" min="50" max="200" value="${p.maxStamina}" data-id="${i}" data-stat="maxStamina"></div>
+        <div class="stat-item"><span class="stat-label">回復力</span><input type="number" min="1" max="99" value="${p.recovery}" data-id="${i}" data-stat="recovery"></div>
+      </div>
+      <div class="stat-category">テクニカル</div>
+      <div class="stat-line">
+        <div class="stat-item"><span class="stat-label">シュート</span><input type="number" min="1" max="99" value="${p.sht}" data-id="${i}" data-stat="sht"></div>
+        <div class="stat-item"><span class="stat-label">3P</span><input type="number" min="1" max="99" value="${p.tpt}" data-id="${i}" data-stat="tpt"></div>
+        <div class="stat-item"><span class="stat-label">ドリブル</span><input type="number" min="1" max="99" value="${p.dribble}" data-id="${i}" data-stat="dribble"></div>
+        <div class="stat-item"><span class="stat-label">パス</span><input type="number" min="1" max="99" value="${p.pas}" data-id="${i}" data-stat="pas"></div>
+      </div>
+      <div class="stat-line">
+        <div class="stat-item"><span class="stat-label">マーク</span><input type="number" min="1" max="99" value="${p.marking}" data-id="${i}" data-stat="marking"></div>
+        <div class="stat-item"><span class="stat-label">リバウンド</span><input type="number" min="1" max="99" value="${p.rebound}" data-id="${i}" data-stat="rebound"></div>
+        <div class="stat-item"><span class="stat-label">スティール</span><input type="number" min="1" max="99" value="${p.stl}" data-id="${i}" data-stat="stl"></div>
+        <div class="stat-item"><span class="stat-label">ハンドリング</span><input type="number" min="1" max="99" value="${p.handling}" data-id="${i}" data-stat="handling"></div>
+      </div>
+      <div class="stat-category">メンタル</div>
+      <div class="stat-line">
+        <div class="stat-item"><span class="stat-label">運動量</span><input type="number" min="1" max="99" value="${p.workrate}" data-id="${i}" data-stat="workrate"></div>
+        <div class="stat-item"><span class="stat-label">視野</span><input type="number" min="1" max="99" value="${p.vision}" data-id="${i}" data-stat="vision"></div>
+        <div class="stat-item"><span class="stat-label">チームワーク</span><input type="number" min="1" max="99" value="${p.teamwork}" data-id="${i}" data-stat="teamwork"></div>
+        <div class="stat-item"><span class="stat-label">ポジショニング</span><input type="number" min="1" max="99" value="${p.positioning}" data-id="${i}" data-stat="positioning"></div>
+      </div>
+      <div class="stat-line">
+        <div class="stat-item"><span class="stat-label">予測力</span><input type="number" min="1" max="99" value="${p.anticipation}" data-id="${i}" data-stat="anticipation"></div>
+        <div class="stat-item"><span class="stat-label">判断力</span><input type="number" min="1" max="99" value="${p.decisions}" data-id="${i}" data-stat="decisions"></div>
+        <div class="stat-item"><span class="stat-label">積極性</span><input type="number" min="1" max="99" value="${p.aggression}" data-id="${i}" data-stat="aggression"></div>
+        <div class="stat-item"><span class="stat-label">反応速度</span><input type="number" min="1" max="99" value="${p.reactions}" data-id="${i}" data-stat="reactions"></div>
+      </div>
     `;
     container.appendChild(row);
   });
@@ -108,6 +178,8 @@ function buildRosterUI() {
       if(stat === 'maxStamina') {
         players[id][stat] = constrain(parseInt(e.target.value) || 100, 50, 200);
         players[id].stamina = min(players[id].stamina, players[id].maxStamina);
+      } else if(stat === 'height') {
+        players[id][stat] = constrain(parseInt(e.target.value) || 190, 160, 230);
       } else {
         players[id][stat] = constrain(parseInt(e.target.value) || 50, 1, 99);
       }
@@ -212,7 +284,9 @@ function updatePlayerPhysics(p) {
   p.prevX = p.x; p.prevY = p.y;
 
   if(p.state === "idle") {
-    p.stamina = min(p.maxStamina, p.stamina + 0.08);
+    // 回復力が高いほどスタミナ回復が早い
+    let recoveryRate = map(p.recovery, 0, 100, 0.04, 0.12);
+    p.stamina = min(p.maxStamina, p.stamina + recoveryRate);
   } else {
     // 移動距離に応じて減少 (1/5に調整)
     let staminaCost = (0.001 + moveDist * 0.0004) * p.staminaDecay;
@@ -499,10 +573,24 @@ function updatePlayerAI(p) {
   }
 }
 
-function moveToward(p, tx, ty, spd) {
+function moveToward(p, tx, ty, targetSpeed) {
+  // 瞬発力による滑らかな加速システム
+  // 瞬発力が高いほど早くトップスピードに到達
+  let accelerationRate = map(p.acceleration, 0, 100, 0.03, 0.15);
+
+  // 現在の速度を目標速度に向けて調整
+  if(p.currentSpeed < targetSpeed) {
+    // 加速
+    p.currentSpeed = min(targetSpeed, p.currentSpeed + accelerationRate * targetSpeed);
+  } else if(p.currentSpeed > targetSpeed) {
+    // 減速（加速よりも速く減速）
+    p.currentSpeed = max(targetSpeed, p.currentSpeed - accelerationRate * targetSpeed * 1.5);
+  }
+
+  // 現在の速度で移動
   let a = atan2(ty-p.y, tx-p.x);
-  p.x = constrain(p.x + cos(a)*spd, 25, 975);
-  p.y = constrain(p.y + sin(a)*spd, 262.5, 550);
+  p.x = constrain(p.x + cos(a)*p.currentSpeed, 25, 975);
+  p.y = constrain(p.y + sin(a)*p.currentSpeed, 262.5, 550);
 }
 
 function passTo(passer, receiver) {
