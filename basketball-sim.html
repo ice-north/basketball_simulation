@@ -43,9 +43,10 @@ let players = [], ball, scorePlayer = 0, scoreDefender = 0, goalChecked = false;
 let gameTime = 720, quarter = 1, shotClock = 24, possession = null;
 let gameState = "playing", throwInState = null;
 let particles = [], floatingTexts = [];
-const NET_DAMPING = 0.85, BALL_GRAVITY = 0.45, BOUNCE_FACTOR = 0.72;
+const NET_DAMPING = 0.85, BALL_GRAVITY = 0.45, BOUNCE_FACTOR = 0.72, AIR_RESISTANCE = 0.99;
 let netRight = {offsetX:0,swing:0,phase:0}, netLeft = {offsetX:0,swing:0,phase:0};
 const positions = ["PG","SG","SF","PF","C"];
+const SPEED_WALK = 0.3, SPEED_JOG = 0.6, SPEED_RUN = 1.0, SPEED_SPRINT = 1.5;
 
 function setup() {
   let c = createCanvas(1000, 750);
@@ -75,7 +76,7 @@ function initPlayers() {
       prevX: team==="PlayerTeam" ? 187.5+i*37.5 : 812.5-((i-5)*37.5),
       prevY: 350+((i%5)*43.75),
       hasBall: false, lock: 0, isJumping: false, size: 25,
-      state: "idle", dribblePhase: 0, mustShoot: false,
+      state: "idle", dribblePhase: 0, mustShoot: false, speedMultiplier: SPEED_RUN,
       moveTarget: null, actionQueue: []
     };
   }
@@ -222,6 +223,7 @@ function updatePlayerPhysics(p) {
 function updatePlayerAI(p) {
   // スローイン時：スロワーは指定位置へ、パスを出す。他の選手は受け取る位置へ
   if(throwInState && throwInState.thrower === p.id) {
+    p.speedMultiplier = SPEED_JOG; // スローインは小走り
     moveToward(p, throwInState.x, throwInState.y, p.spd * 0.06);
     if(dist(p.x, p.y, throwInState.x, throwInState.y) < 20) {
       if(!p.hasBall) {
@@ -241,6 +243,7 @@ function updatePlayerAI(p) {
   }
   // スローイン時：スロワー以外の味方は受け取りやすい位置へ
   if(throwInState && p.team === throwInState.team && p.id !== throwInState.thrower) {
+    p.speedMultiplier = SPEED_WALK; // 受け取る位置への微調整は歩き
     let thrower = players.find(pl => pl.id === throwInState.thrower);
     if(thrower) {
       // スロワーから適度な距離に移動
@@ -257,10 +260,12 @@ function updatePlayerAI(p) {
   let isOffense = p.team === possession;
   let tg = p.team === "PlayerTeam" ? {x:finalGoal.ringX,y:finalGoal.ringY} : {x:1000-finalGoal.ringX,y:finalGoal.ringY};
   let og = p.team === "PlayerTeam" ? {x:1000-finalGoal.ringX,y:finalGoal.ringY} : {x:finalGoal.ringX,y:finalGoal.ringY};
-  let speed = p.spd * 0.045 * (p.stamina/p.maxStamina * 0.4 + 0.6);
+  let baseSpeed = p.spd * 0.045 * (p.stamina/p.maxStamina * 0.4 + 0.6);
+  let speed = baseSpeed * p.speedMultiplier;
 
   if(p.hasBall && p.lock <= 0) {
     p.state = "offense";
+    p.speedMultiplier = SPEED_SPRINT; // ボール保持者は全速力
     let dToGoal = dist(p.x,p.y,tg.x,tg.y);
     let dominated = players.filter(d => d.team !== p.team && dist(d.x,d.y,p.x,p.y) < 40).length >= 2;
     let teammates = players.filter(t => t.team===p.team && t.id!==p.id);
@@ -320,6 +325,7 @@ function updatePlayerAI(p) {
     
   } else if(isOffense && p.lock <= 0) {
     p.state = "support";
+    p.speedMultiplier = SPEED_RUN; // オフェンスサポートは走る
     let handler = players.find(pl=>pl.hasBall);
     if(handler) {
       // ポジション別の役割に基づいた位置取り
@@ -366,6 +372,28 @@ function updatePlayerAI(p) {
       }
 
       moveToward(p, constrain(targetX,125,875), constrain(targetY,275,537.5), speed*0.8);
+    } else {
+      // ボール保持者がいない場合（ルーズボール）
+      if(ball.z < 80 && !players.some(pl=>pl.hasBall)) {
+        p.speedMultiplier = SPEED_SPRINT; // ルーズボールは全速力
+        moveToward(p, ball.x, ball.y, speed);
+      } else {
+        // 理想的なオフェンスポジションへ移動
+        p.speedMultiplier = SPEED_JOG;
+        let pos = p.position;
+        let idealX, idealY;
+        if(pos === "PG") {
+          idealX = p.team === "PlayerTeam" ? 400 : 600;
+          idealY = 388.75;
+        } else if(pos === "SG" || pos === "SF") {
+          idealX = p.team === "PlayerTeam" ? 650 : 350;
+          idealY = pos === "SG" ? 320 : 450;
+        } else {
+          idealX = p.team === "PlayerTeam" ? 750 : 250;
+          idealY = pos === "PF" ? 340 : 430;
+        }
+        moveToward(p, constrain(idealX,125,875), constrain(idealY,275,537.5), speed*0.5);
+      }
     }
   } else if(!isOffense) {
     p.state = "defense";
@@ -373,8 +401,11 @@ function updatePlayerAI(p) {
     let retreatX = p.team === "PlayerTeam" ? 250 : 750;
     let inPos = p.team === "PlayerTeam" ? p.x < 437.5 : p.x > 562.5;
 
-    if(!inPos && handler) moveToward(p, retreatX, p.y, speed);
-    else if(handler) {
+    if(!inPos && handler) {
+      p.speedMultiplier = SPEED_RUN; // 守備位置への移動は走る
+      moveToward(p, retreatX, p.y, speed);
+    } else if(handler) {
+      p.speedMultiplier = SPEED_JOG; // マークは小走り
       // 同じポジションの相手選手をマーク
       let mark = players.filter(t=>t.team!==p.team)[p.id%5];
       if(mark) {
@@ -404,14 +435,40 @@ function updatePlayerAI(p) {
         let defX = (mark.x * markWeight + og.x * goalWeight + handler.x * ballWeight) / totalWeight;
         let defY = (mark.y * markWeight + og.y * goalWeight + handler.y * ballWeight) / totalWeight;
 
+        // マークマンとボール保持者に近い場合は全速力
+        let distToMark = dist(p.x, p.y, mark.x, mark.y);
+        if(mark.hasBall && distToMark > 50) {
+          p.speedMultiplier = SPEED_SPRINT;
+        } else if(distToMark < 30) {
+          p.speedMultiplier = SPEED_WALK; // 至近距離は歩き
+        }
+
         moveToward(p, defX, defY, speed*0.75);
         if(mark.hasBall && dist(p.x,p.y,mark.x,mark.y) < 30 && random(100) < p.stl * 0.06 && p.lock <= 0) attemptSteal(p, mark);
       }
-    } else if(ball.z < 50 && !players.some(pl=>pl.hasBall)) {
+    } else if(ball.z < 80 && !players.some(pl=>pl.hasBall)) {
+      // ルーズボール：全速力で追う
+      p.speedMultiplier = SPEED_SPRINT;
       moveToward(p, ball.x, ball.y, speed);
       if(dist(p.x,p.y,ball.x,ball.y) < 25 && ball.z < 40 && p.lock <= 0) {
         p.hasBall = true; possession = p.team; shotClock = 24;
       }
+    } else {
+      // ボール保持者がいない場合：守備位置へ小走り
+      p.speedMultiplier = SPEED_JOG;
+      let pos = p.position;
+      let idealX, idealY;
+      if(pos === "PG" || pos === "SG") {
+        idealX = p.team === "PlayerTeam" ? 300 : 700;
+        idealY = pos === "PG" ? 350 : 420;
+      } else if(pos === "SF") {
+        idealX = p.team === "PlayerTeam" ? 250 : 750;
+        idealY = 388.75;
+      } else {
+        idealX = p.team === "PlayerTeam" ? 200 : 800;
+        idealY = pos === "PF" ? 340 : 430;
+      }
+      moveToward(p, constrain(idealX,125,875), constrain(idealY,275,537.5), speed*0.4);
     }
   }
 }
@@ -496,13 +553,37 @@ function updatePhysics() {
     ball.x = holder.x; ball.y = holder.y; ball.z = holder.z + 45 - dZ;
     ball.vx = 0; ball.vy = 0; ball.vz = 0; ball.passTarget = null; ball.lastTouch = holder.team;
   } else {
+    // 重力の適用
     ball.vz -= BALL_GRAVITY * 0.5;
-    ball.x += ball.vx * 0.5; ball.y += ball.vy * 0.5; ball.z += ball.vz * 0.5;
+
+    // 空気抵抗の適用
+    ball.vx *= AIR_RESISTANCE;
+    ball.vy *= AIR_RESISTANCE;
+    ball.vz *= AIR_RESISTANCE;
+
+    // 位置の更新
+    ball.x += ball.vx * 0.5;
+    ball.y += ball.vy * 0.5;
+    ball.z += ball.vz * 0.5;
+
+    // パスターゲットへのキャッチ判定
     if(ball.passTarget !== null) {
       let rcv = players[ball.passTarget];
-      if(rcv && dist(rcv.x, rcv.y, ball.x, ball.y) < 35 && ball.z < 60) { rcv.hasBall = true; ball.passTarget = null; }
+      if(rcv && dist(rcv.x, rcv.y, ball.x, ball.y) < 35 && ball.z < 60) {
+        rcv.hasBall = true;
+        ball.passTarget = null;
+      }
     }
-    if(ball.z <= 0) { ball.z = 0; ball.vz *= -0.55; ball.vx *= 0.95; ball.vy *= 0.95; goalChecked = false; }
+
+    // 地面との衝突
+    if(ball.z <= 0) {
+      ball.z = 0;
+      ball.vz *= -0.55;
+      ball.vx *= 0.95;
+      ball.vy *= 0.95;
+      goalChecked = false;
+    }
+
     checkRebound(1); checkRebound(-1);
     
     let oob = false, thX = ball.x, thY = ball.y;
