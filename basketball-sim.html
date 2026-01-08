@@ -21,6 +21,9 @@ body { margin: 0; display: flex; flex-direction: column; align-items: center; mi
 .stat-label { font-size: 7px; color: #aaa; min-width: 20px; text-align: right; }
 .stat-item input { width: 32px; padding: 2px; border: none; border-radius: 3px; background: rgba(255,255,255,0.15); color: #fff; text-align: center; font-size: 8px; }
 .stat-item input:focus { outline: 1px solid #0af; background: rgba(255,255,255,0.25); }
+.speed-btn { padding: 4px 8px; margin: 0 2px; border: 1px solid rgba(255,255,255,0.3); border-radius: 4px; background: rgba(255,255,255,0.1); color: #fff; font-size: 10px; cursor: pointer; transition: all 0.2s; }
+.speed-btn:hover { background: rgba(255,255,255,0.2); }
+.speed-btn.active { background: #0af; border-color: #0af; font-weight: bold; }
 </style>
 </head><body>
 <div id="container">
@@ -28,6 +31,13 @@ body { margin: 0; display: flex; flex-direction: column; align-items: center; mi
 <div class="stat-box" id="gameInfo">Q1 12:00</div>
 <div class="stat-box" id="shotClock">SHOT: 24</div>
 <div class="stat-box" id="possession">POSS: --</div>
+<div class="stat-box">
+<span style="margin-right: 8px;">SPEED:</span>
+<button class="speed-btn active" onclick="setGameSpeed(1)">1x</button>
+<button class="speed-btn" onclick="setGameSpeed(2)">2x</button>
+<button class="speed-btn" onclick="setGameSpeed(4)">4x</button>
+<button class="speed-btn" onclick="setGameSpeed(8)">8x</button>
+</div>
 </div>
 <div id="game"></div>
 <div id="roster">
@@ -56,6 +66,8 @@ let lastScorePlayer = 0, lastScoreDefender = 0;
 let jumpBallState = null;
 const positions = ["PG","SG","SF","PF","C"];
 const SPEED_WALK = 0.3, SPEED_JOG = 0.6, SPEED_RUN = 1.0, SPEED_SPRINT = 1.5;
+// ゲーム速度
+let gameSpeed = 1;
 
 function setup() {
   let c = createCanvas(1000, 750);
@@ -197,8 +209,8 @@ function buildRosterUI() {
 function draw() {
   background(40,40,60);
 
-  // ジャンプボール中は時間を止める
-  if (frameCount % 60 === 0 && gameState === "playing" && !throwInState && !jumpBallState) {
+  // ジャンプボール中は時間を止める（速度倍率対応）
+  if (frameCount % Math.floor(60 / gameSpeed) === 0 && gameState === "playing" && !throwInState && !jumpBallState) {
     gameTime--; shotClock--;
     if (shotClock <= 0) shotClockViolation();
     if (gameTime <= 0) { quarter++; gameTime = 720; if(quarter>4) gameState="end"; }
@@ -207,12 +219,14 @@ function draw() {
   drawCourtAndBackboard();
   renderGoalBack(1, netRight); renderGoalBack(-1, netLeft);
 
-  // ジャンプボール処理
+  // ジャンプボール処理（速度倍率対応）
   if(jumpBallState) {
-    updateJumpBall();
+    for (let g = 0; g < gameSpeed; g++) updateJumpBall();
   } else {
-    for (let i = 0; i < 2; i++) updatePhysics();
-    players.forEach(p => { updatePlayerAI(p); updatePlayerPhysics(p); });
+    for (let g = 0; g < gameSpeed; g++) {
+      for (let i = 0; i < 2; i++) updatePhysics();
+      players.forEach(p => { updatePlayerAI(p); updatePlayerPhysics(p); });
+    }
   }
   
   ball.trail.push({x:ball.x,y:ball.y,z:ball.z});
@@ -668,16 +682,16 @@ function shoot(s, tx, ty, is3pt) {
   let acc = is3pt ? s.tpt : s.sht;
 
   // 距離に応じた難易度：近いほど簡単、遠いほど難しい
-  let distanceFactor = map(d, 50, 250, 1.0, 3.5); // 近距離1.0倍、遠距離3.5倍
+  let distanceFactor = map(d, 50, 250, 1.0, 3.0); // 近距離1.0倍、遠距離3.0倍（3.5から軽減）
 
   // 3Pシュート時は能力が高いほど遠距離でも精度が高い
   if(is3pt) {
-    let skillBonus = map(acc, 0, 100, 1.0, 0.3); // 能力が高いほど距離の影響を軽減
+    let skillBonus = map(acc, 0, 100, 1.0, 0.25); // 能力が高いほど距離の影響を軽減
     distanceFactor *= skillBonus;
   }
 
-  // 最終的な誤差：能力、距離、スタミナを考慮
-  let baseErr = map(acc, 0, 100, 14, 1.5);
+  // 最終的な誤差：能力、距離、スタミナを考慮（精度向上）
+  let baseErr = map(acc, 0, 100, 10, 0.8); // 14,1.5から改善
   let staminaFactor = (s.stamina/s.maxStamina * 0.3 + 0.7);
   let err = baseErr * distanceFactor * staminaFactor;
 
@@ -752,18 +766,32 @@ function updateJumpBall() {
   j2.x = 510;
   j2.y = 388.75;
 
-  // 他の4人をサークル外に交互に配置
-  let otherPlayers = players.filter(p => p.id !== j1.id && p.id !== j2.id);
+  // 他の選手をサークル外に交互に配置（青赤青赤...）
+  let otherPlayerTeam = players.filter(p => p.team === "PlayerTeam" && p.id !== j1.id);
+  let otherDefenderTeam = players.filter(p => p.team === "DefenderTeam" && p.id !== j2.id);
+
+  // 8つの位置（サークル外周）
   let circlePositions = [
-    {x: 500, y: 330},  // 上
-    {x: 500, y: 447.5}, // 下
-    {x: 425, y: 388.75}, // 左
-    {x: 575, y: 388.75}  // 右
+    {x: 500, y: 320},    // 上
+    {x: 560, y: 340},    // 右上
+    {x: 585, y: 388.75}, // 右
+    {x: 560, y: 437.5},  // 右下
+    {x: 500, y: 457.5},  // 下
+    {x: 440, y: 437.5},  // 左下
+    {x: 415, y: 388.75}, // 左
+    {x: 440, y: 340}     // 左上
   ];
-  for(let i = 0; i < otherPlayers.length; i++) {
-    let pos = circlePositions[i % 4];
-    otherPlayers[i].x = pos.x;
-    otherPlayers[i].y = pos.y;
+
+  // 交互に配置
+  for(let i = 0; i < 4; i++) {
+    if(otherPlayerTeam[i]) {
+      otherPlayerTeam[i].x = circlePositions[i * 2].x;
+      otherPlayerTeam[i].y = circlePositions[i * 2].y;
+    }
+    if(otherDefenderTeam[i]) {
+      otherDefenderTeam[i].x = circlePositions[i * 2 + 1].x;
+      otherDefenderTeam[i].y = circlePositions[i * 2 + 1].y;
+    }
   }
 
   jumpBallState.timer++;
@@ -1144,14 +1172,14 @@ function drawScoreboard() {
   strokeWeight(2);
   text(scorePlayer, sbX + 120, sbY + 5);
 
-  // 右側：クォーター別スコア（縦4行）
+  // 中央下部：クォーター別スコア（縦4行）
   textSize(10);
   textFont('sans-serif');
   noStroke();
 
-  let qX = sbX + 150;
-  let qStartY = sbY - 20;
-  let qSpacing = 15;
+  let qX = sbX; // 中央に配置
+  let qStartY = sbY + 30;
+  let qSpacing = 12;
 
   for(let i = 0; i < 4; i++) {
     let qY = qStartY + i * qSpacing;
@@ -1327,6 +1355,15 @@ function renderGoalFront(side, net) {
   stroke(255,50,50); strokeWeight(3); noFill();
   arc(rx, g.ringY-g.ringZ, g.ringSize, g.ringSize*0.4, 0, PI);
   drawNetGemini(rx, g.ringY, g.ringZ, net, false);
+}
+
+function setGameSpeed(speed) {
+  gameSpeed = speed;
+  // ボタンのアクティブ状態を更新
+  document.querySelectorAll('.speed-btn').forEach(btn => {
+    btn.classList.remove('active');
+  });
+  event.target.classList.add('active');
 }
 </script>
 </body></html>
