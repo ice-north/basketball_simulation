@@ -137,6 +137,7 @@ function initPlayers() {
       state: "idle", dribblePhase: 0, mustShoot: false,
       speedMultiplier: SPEED_RUN,
       currentSpeed: 0, // 現在の速度（加速用）
+      facingAngle: 0, // 向いている方向（ラジアン）
       moveTarget: null, actionQueue: [],
       // 戦略用
       isScreening: false, screenTarget: null, screenTimer: 0,
@@ -226,7 +227,16 @@ function draw() {
   if (frameCount % Math.floor(60 / gameSpeed) === 0 && gameState === "playing" && !throwInState && !jumpBallState) {
     gameTime--; shotClock--;
     if (shotClock <= 0) shotClockViolation();
-    if (gameTime <= 0) { quarter++; gameTime = 720; if(quarter>4) gameState="end"; }
+    if (gameTime <= 0) {
+      quarter++; gameTime = 720;
+      if(quarter > 4) { gameState = "end"; }
+      else {
+        // クォーター間：ジャンプボール
+        let holder = players.find(p=>p.hasBall); if(holder) holder.hasBall = false;
+        teamFouls.PlayerTeam = 0; teamFouls.DefenderTeam = 0; // クォーターファウルリセット
+        startJumpBall();
+      }
+    }
   }
   updateUI();
   drawCourtAndBackboard();
@@ -295,18 +305,63 @@ function drawScoreboard() {
 
 function drawPlayer(p) {
   let baseColor = p.team === "PlayerTeam" ? [0,150,255] : [255,50,50];
-  noStroke(); fill(0,50); ellipse(p.x, p.y, p.size*1.2, p.size*0.5);
-  let yOff = p.z + (p.hasBall && !p.isJumping ? sin(p.dribblePhase)*3 : 0);
-  stroke(255); strokeWeight(2); fill(baseColor[0],baseColor[1],baseColor[2]);
-  ellipse(p.x, p.y - yOff, p.size, p.size);
+  let darkColor = p.team === "PlayerTeam" ? [0,100,200] : [200,30,30];
+
+  // 影
+  noStroke(); fill(0,40); ellipse(p.x, p.y, p.size*1.3, p.size*0.5);
+
+  let yOff = p.z + (p.hasBall && !p.isJumping ? sin(p.dribblePhase)*2 : 0);
+  let px = p.x, py = p.y - yOff;
+
+  // 体（楕円＋方向表示）
+  stroke(darkColor[0],darkColor[1],darkColor[2]); strokeWeight(2);
+  fill(baseColor[0],baseColor[1],baseColor[2]);
+  ellipse(px, py, p.size, p.size);
+
+  // 方向を示す小さな三角（進行方向）
+  if(p.currentSpeed > 0.3) {
+    let dirX = cos(p.facingAngle) * 11;
+    let dirY = sin(p.facingAngle) * 5;
+    noStroke(); fill(255,255,255,120);
+    triangle(px+dirX, py+dirY, px+dirX*0.3-dirY*0.4, py+dirY*0.3+dirX*0.08, px+dirX*0.3+dirY*0.4, py+dirY*0.3-dirX*0.08);
+  }
+
+  // ドリブルの腕の表現（進行方向横にボールを突く動き）
+  if(p.hasBall && !p.isJumping && p.currentSpeed > 0.3) {
+    let armX = cos(p.facingAngle) * 8;
+    let armY = sin(p.facingAngle) * 4;
+    stroke(baseColor[0]+40,baseColor[1]+40,baseColor[2]+40); strokeWeight(2);
+    line(px, py, px + armX, py + armY + sin(p.dribblePhase) * 2);
+  }
+
+  // ポジション・背番号
   noStroke(); fill(255); textSize(8); textAlign(CENTER,CENTER);
-  text(p.position, p.x, p.y - yOff - 2);
-  textSize(6); text(p.number, p.x, p.y - yOff + 6);
+  text(p.position, px, py - 3);
+  textSize(6); fill(255,255,255,200); text(p.number, px, py + 6);
+
+  // スタミナバー
   let stam = p.stamina / p.maxStamina;
-  fill(100); rect(p.x-12, p.y-yOff-20, 24, 3);
-  fill(stam>0.5?[0,255,100]:stam>0.25?[255,200,0]:[255,50,50]);
-  rect(p.x-12, p.y-yOff-20, 24*stam, 3);
-  if(p.hasBall) { noFill(); stroke(255,255,0,150); strokeWeight(2); ellipse(p.x, p.y-yOff, p.size+10+sin(frameCount*0.1)*3); }
+  fill(30,30,30,150); rect(px-12, py-20, 24, 3, 1);
+  let stColor = stam>0.5?[0,230,80]:stam>0.25?[255,180,0]:[255,40,40];
+  fill(stColor[0],stColor[1],stColor[2]); rect(px-12, py-20, 24*stam, 3, 1);
+
+  // ボール保持者のハイライト
+  if(p.hasBall) {
+    noFill(); stroke(255,255,0,100+sin(frameCount*0.15)*50); strokeWeight(2);
+    ellipse(px, py, p.size+8+sin(frameCount*0.1)*3);
+  }
+
+  // ジャンプ中の高さ表示（ジャンプが見える）
+  if(p.isJumping && p.z > 5) {
+    stroke(255,255,255,60); strokeWeight(1);
+    line(p.x, p.y, p.x, p.y - p.z);
+  }
+
+  // スクリーン中の表示
+  if(p.isScreening) {
+    noFill(); stroke(255,200,0,80); strokeWeight(3);
+    arc(px, py, p.size+14, p.size+14, 0, PI);
+  }
 }
 
 function drawBallTrail() {
@@ -321,8 +376,13 @@ function updatePlayerPhysics(p) {
   if(p.isJumping) {
     p.vz -= BALL_GRAVITY * 0.5; p.z += p.vz;
     if(p.hasBall && p.mustShoot && p.vz <= 0) {
-      let tg = p.team === "PlayerTeam" ? {x:finalGoal.ringX,y:finalGoal.ringY} : {x:1000-finalGoal.ringX,y:finalGoal.ringY};
-      shoot(p, tg.x, tg.y, dist(p.x,p.y,tg.x,tg.y) > 180);
+      // シュート前にブロック判定
+      let nearBlocker = players.find(d => d.team !== p.team && (d.position === "C" || d.position === "PF") && dist(d.x,d.y,p.x,p.y) < 40 && d.lock <= 0);
+      if(nearBlocker) attemptBlock(nearBlocker, p);
+      if(p.hasBall) { // ブロックされなかった場合のみシュート
+        let tg = p.team === "PlayerTeam" ? {x:finalGoal.ringX,y:finalGoal.ringY} : {x:1000-finalGoal.ringX,y:finalGoal.ringY};
+        shoot(p, tg.x, tg.y, dist(p.x,p.y,tg.x,tg.y) > 180);
+      }
     }
     if(p.z <= 0) { p.z = 0; p.vz = 0; p.isJumping = false; p.mustShoot = false; }
   }
@@ -407,12 +467,13 @@ function updatePlayerAI(p) {
 
   if(p.hasBall && p.lock <= 0) {
     p.state = "offense";
-    p.speedMultiplier = SPEED_SPRINT; // ボール保持者は全速力
     let dToGoal = dist(p.x,p.y,tg.x,tg.y);
-    let dominated = players.filter(d => d.team !== p.team && dist(d.x,d.y,p.x,p.y) < 40).length >= 2;
+    let nearDefenders = players.filter(d => d.team !== p.team && dist(d.x,d.y,p.x,p.y) < 40);
+    let dominated = nearDefenders.length >= 2;
+    let pressured = nearDefenders.length >= 1;
     let teammates = players.filter(t => t.team===p.team && t.id!==p.id);
 
-    // 速攻判断：前方の敵味方の数を数える
+    // 速攻判断
     let forwardRange = 200;
     let enemiesForward = players.filter(d => {
       if(d.team === p.team) return false;
@@ -423,65 +484,84 @@ function updatePlayerAI(p) {
       let toGoal = p.team === "PlayerTeam" ? t.x > p.x : t.x < p.x;
       return toGoal && dist(p.x, p.y, t.x, t.y) < forwardRange;
     }).length;
+    let outnumbered = enemiesForward - alliesForward >= 2;
+    let fastBreak = alliesForward > enemiesForward && dToGoal > 200; // 速攻チャンス
 
-    let outnumbered = enemiesForward - alliesForward >= 2; // 数的不利
+    // パス頻度はポジション・状況・視野能力で決定
+    let passBaseRate = map(p.vision, 0, 100, 0.02, 0.07);
+    if(p.position === "PG") passBaseRate *= 1.6; // PGはパス多め
+    if(pressured) passBaseRate *= 2.0; // プレッシャー下ではパス増加
+    if(dominated) passBaseRate *= 3.0; // ダブルチーム時はパス必須
 
-    // PGへのパス優先（ボール運びの役割）
-    if(p.position !== "PG") {
+    // ①カッティング選手へのパス（最優先）
+    let cuttingMate = teammates.find(t => t.isCutting && dist(p.x, p.y, t.x, t.y) < 250);
+    if(cuttingMate && random() < passBaseRate * 1.5) {
+      passTo(p, cuttingMate); return;
+    }
+
+    // ②オープンな味方へのパス（視野で検索範囲が広がる）
+    let searchRange = map(p.vision, 0, 100, 150, 350);
+    let bestPass = null, bestScore = -999;
+    for(let t of teammates) {
+      if(dist(p.x, p.y, t.x, t.y) > searchRange) continue;
+      let tDistToGoal = dist(t.x, t.y, tg.x, tg.y);
+      let nearestDefToT = Math.min(...players.filter(d => d.team !== p.team).map(d => dist(d.x,d.y,t.x,t.y)));
+      let openness = min(nearestDefToT, 80); // オープン度
+      let closerToGoal = dToGoal - tDistToGoal; // ゴールに近づくか
+      let score = openness * 1.0 + closerToGoal * 0.5;
+      if(t.position === "SG" && tDistToGoal < 200) score += 20; // SG3P圏内優遇
+      if(t.position === "C" && tDistToGoal < 100) score += 25; // Cゴール下優遇
+      if(score > bestScore) { bestScore = score; bestPass = t; }
+    }
+    if(bestPass && random() < passBaseRate && bestScore > 30) {
+      passTo(p, bestPass); return;
+    }
+
+    // ③PGへの戻しパス（展開のため）
+    if(p.position !== "PG" && dToGoal > 150) {
       let pgMate = teammates.find(t => t.position === "PG" && dist(p.x, p.y, t.x, t.y) < 250);
-      if(pgMate && random() < 0.025) {
-        let isFree = players.filter(d => d.team !== p.team).every(d => dist(d.x,d.y,pgMate.x,pgMate.y) > 40);
-        if(isFree) { passTo(p, pgMate); return; }
+      if(pgMate && pressured && random() < passBaseRate * 1.3) {
+        passTo(p, pgMate); return;
       }
     }
 
-    // ピック&ロールの開始判定（PGやSGが主導）
-    if((p.position === "PG" || p.position === "SG") && random() < 0.02 && !p.isScreening) {
+    // ④ピック&ロール開始（PG/SG主導）
+    if((p.position === "PG" || p.position === "SG") && random() < 0.015 && dToGoal < 250) {
       initiateScreen(p);
     }
 
-    // カッティング選手へのパス（優先度高）
-    let cuttingMate = teammates.find(t => t.isCutting && dist(p.x, p.y, t.x, t.y) < 200);
-    if(cuttingMate && random() < 0.03) {
-      let isFree = players.filter(d => d.team !== p.team).every(d => dist(d.x,d.y,cuttingMate.x,cuttingMate.y) > 40);
-      if(isFree) { passTo(p, cuttingMate); return; }
-    }
-
-    // 通常パス
-    let openMate = teammates.find(t => {
-      let isFree = players.filter(d => d.team !== p.team).every(d => dist(d.x,d.y,t.x,t.y) > 45);
-      let closer = dist(t.x,t.y,tg.x,tg.y) < dToGoal - 30;
-      return isFree && closer;
-    });
-    if(openMate && random() < 0.018) { passTo(p, openMate); return; }
-
-    // 数的不利の場合：味方を待つ（パスか安全な場所で待機）
-    if(outnumbered && dToGoal > 150) {
-      let safeMate = teammates.find(t => dist(p.x, p.y, t.x, t.y) < 150);
-      if(safeMate && random() < 0.03) { passTo(p, safeMate); return; }
-      // 後方で待機（ゆっくり移動）
-      let waitX = p.team === "PlayerTeam" ? p.x - 20 : p.x + 20;
-      moveToward(p, waitX, p.y, speed * 0.3);
+    // ⑤速攻：前方のフリーな味方にロングパス
+    if(fastBreak) {
+      p.speedMultiplier = SPEED_SPRINT;
+      let fwdMate = teammates.find(t => {
+        let isAhead = p.team === "PlayerTeam" ? t.x > p.x + 80 : t.x < p.x - 80;
+        return isAhead && dist(t.x,t.y,tg.x,tg.y) < 200;
+      });
+      if(fwdMate && random() < 0.05) { passTo(p, fwdMate); return; }
+      moveToward(p, tg.x, tg.y, speed * SPEED_SPRINT);
       return;
     }
 
-    // ポジション別シュート判断
-    let shootDist = 160;
-    let shootChance = 0.025;
-
-    if(p.position === "SG") {
-      // SG: 積極的にスコアを狙う、3Pも得意
-      shootDist = 220;
-      shootChance = 0.035;
-    } else if(p.position === "SF") {
-      // SF: 中からも外からも得点
-      shootDist = 180;
-      shootChance = 0.03;
-    } else if(p.position === "C" || p.position === "PF") {
-      // C/PF: ゴール近くで確実に
-      shootDist = 130;
-      shootChance = 0.028;
+    // ⑥数的不利時：無理せず展開
+    if(outnumbered && dToGoal > 150) {
+      p.speedMultiplier = SPEED_JOG;
+      if(bestPass && random() < 0.04) { passTo(p, bestPass); return; }
+      let waitX = p.team === "PlayerTeam" ? p.x - 15 : p.x + 15;
+      moveToward(p, waitX, p.y, speed * 0.4);
+      return;
     }
+
+    // ⑦シュート判断（ポジション別・状況別）
+    let shootDist = 160, shootChance = 0.03;
+    if(p.position === "SG") { shootDist = 220; shootChance = 0.04; }
+    else if(p.position === "SF") { shootDist = 190; shootChance = 0.035; }
+    else if(p.position === "C" || p.position === "PF") { shootDist = 130; shootChance = 0.04; }
+    else if(p.position === "PG") { shootDist = 200; shootChance = 0.025; }
+
+    // プレッシャーなし＋射程内でシュート確率UP
+    if(!pressured && dToGoal < shootDist * 0.7) shootChance *= 2.0;
+    // ダブルチームされてたら無理に打たない
+    if(dominated) shootChance *= 0.2;
 
     if(dToGoal < shootDist && random() < shootChance && !p.isJumping) {
       p.isJumping = true; p.mustShoot = true;
@@ -489,13 +569,14 @@ function updatePlayerAI(p) {
       return;
     }
 
-    // ドライブ
+    // ⑧ドライブ（ディフェンダー回避しながらゴールへ）
+    p.speedMultiplier = pressured ? SPEED_RUN : SPEED_SPRINT;
     let avoidX = 0, avoidY = 0;
     players.filter(d=>d.team!==p.team).forEach(d => {
       let dd = dist(p.x,p.y,d.x,d.y);
-      if(dd < 50 && dd > 0) { avoidX += (p.x-d.x)/dd*2; avoidY += (p.y-d.y)/dd*2; }
+      if(dd < 55 && dd > 0) { avoidX += (p.x-d.x)/dd*2.5; avoidY += (p.y-d.y)/dd*2.5; }
     });
-    moveToward(p, tg.x + avoidX*15, tg.y + avoidY*15, speed);
+    moveToward(p, tg.x + avoidX*12, tg.y + avoidY*12, speed);
     
   } else if(isOffense && p.lock <= 0) {
     p.state = "support";
@@ -544,72 +625,64 @@ function updatePlayerAI(p) {
         }
       }
 
-      // ポジション別の役割に基づいた位置取り
+      // フロアバランスを考慮したポジション別位置取り
+      // 5つのスポットに分散（コーナー2、ウイング2、トップ1）
       let pos = p.position;
       let targetX, targetY;
+      let side = p.team === "PlayerTeam" ? 1 : -1;
 
+      // 各ポジションの理想的なスポット（ゴール基準の相対位置）
       if(pos === "PG") {
-        // PG: ボール運びをサポート、中盤での展開役（コート上のコーチ）
-        // ハンドラーの少し後方で展開、パスコースを作る
-        let backDist = 80;
-        let ang = atan2(handler.y - tg.y, handler.x - tg.x);
-        targetX = handler.x + cos(ang) * backDist;
-        targetY = handler.y + sin(ang) * backDist + random(-30, 30);
+        // PG: トップ・オブ・ザ・キー（ゴールから離れた中央）
+        targetX = tg.x - side * 160;
+        targetY = tg.y;
+        // ボール持ちが他にいる場合、ウイング寄りに移動
+        if(handler.position !== "PG") {
+          targetY = tg.y + (p.y > tg.y ? 40 : -40);
+        }
+        p.speedMultiplier = SPEED_JOG;
       } else if(pos === "SG") {
-        // SG: 積極的にスコアを狙う、3Pライン付近（180-220px）
-        let idealDist = 200;
-        let ang = atan2(p.y - tg.y, p.x - tg.x);
-
-        // 3Pライン付近に移動、リバウンドにも飛び込める位置
-        let spreadAng = -PI/5;
-        targetX = tg.x + cos(ang + spreadAng) * idealDist;
-        targetY = tg.y + sin(ang + spreadAng) * idealDist;
-
-        // ハンドラーより前方を優先
-        if(p.team === "PlayerTeam" && targetX < handler.x) targetX = handler.x + 60;
-        if(p.team !== "PlayerTeam" && targetX > handler.x) targetX = handler.x - 60;
+        // SG: ウイング/3Pライン付近（得点圏）
+        let wingY = p.id % 2 === 0 ? tg.y - 80 : tg.y + 80; // 上下に散らばる
+        targetX = tg.x - side * 130;
+        targetY = wingY;
+        p.speedMultiplier = SPEED_RUN;
       } else if(pos === "SF") {
-        // SF: オールラウンド、中からも外からも、身体を張る（150-180px）
-        let idealDist = 165;
-        let ang = atan2(p.y - tg.y, p.x - tg.x);
-
-        // 柔軟に動き、状況に応じてインサイド・アウトサイド
-        let spreadAng = PI/6;
-        targetX = tg.x + cos(ang + spreadAng) * idealDist;
-        targetY = tg.y + sin(ang + spreadAng) * idealDist;
-
-        // 前方を優先
-        if(p.team === "PlayerTeam" && targetX < handler.x) targetX = handler.x + 50;
-        if(p.team !== "PlayerTeam" && targetX > handler.x) targetX = handler.x - 50;
+        // SF: 逆サイドのウイング（フロアを広く使う）
+        let wingY = p.id % 2 === 0 ? tg.y + 70 : tg.y - 70;
+        targetX = tg.x - side * 100;
+        targetY = wingY;
+        p.speedMultiplier = SPEED_RUN;
       } else if(pos === "PF") {
-        // PF: インサイド・アウトサイドを行き来、柔軟（110-150px）
-        // 状況に応じて外にも出る
-        let idealDist = 130;
-        let ang = atan2(p.y - tg.y, p.x - tg.x);
-
-        // 時々外に出る（スクリーン、パス受け）
-        let goOut = frameCount % 300 < 100;
-        if(goOut) idealDist = 170;
-
-        let spreadAng = PI/4;
-        targetX = tg.x + cos(ang + spreadAng) * idealDist;
-        targetY = tg.y + sin(ang + spreadAng) * idealDist;
+        // PF: ハイポスト/エルボー（中間地帯）
+        let cycle = (frameCount % 360) / 360;
+        let idealDist = 90 + sin(cycle * TWO_PI) * 40; // 内外を行き来
+        targetX = tg.x - side * idealDist;
+        targetY = tg.y + (p.id % 2 === 0 ? -55 : 55);
+        p.speedMultiplier = SPEED_RUN;
       } else { // C
-        // C: ゴール下でプレー、パワープレー、リバウンド（80-110px）
-        let idealDist = 95;
-        let ang = atan2(p.y - tg.y, p.x - tg.x);
-
-        // ペイントエリア中心、ゴール下での存在感
-        let spreadAng = -PI/4;
-        targetX = tg.x + cos(ang + spreadAng) * idealDist;
-        targetY = tg.y + sin(ang + spreadAng) * idealDist;
+        // C: ローポスト/ペイントエリア（ゴール近く）
+        targetX = tg.x - side * 50;
+        targetY = tg.y + (p.id % 2 === 0 ? 40 : -40);
+        p.speedMultiplier = SPEED_JOG;
       }
 
-      // ハンドラーから離れすぎないように調整
-      let distToHandler = dist(p.x, p.y, handler.x, handler.y);
-      if(distToHandler > 250) {
-        targetX = lerp(targetX, handler.x, 0.4);
-        targetY = lerp(targetY, handler.y, 0.4);
+      // 他の味方との重なりを回避（フロアスペーシング）
+      let myTeammates = players.filter(t => t.team === p.team && t.id !== p.id && t.id !== handler.id);
+      for(let t of myTeammates) {
+        let dd = dist(targetX, targetY, t.x, t.y);
+        if(dd < 60 && dd > 0) {
+          let pushAng = atan2(targetY - t.y, targetX - t.x);
+          targetX += cos(pushAng) * (60 - dd) * 0.5;
+          targetY += sin(pushAng) * (60 - dd) * 0.5;
+        }
+      }
+
+      // ハンドラーから離れすぎないように（パスが届く距離）
+      let distToHandler = dist(targetX, targetY, handler.x, handler.y);
+      if(distToHandler > 220) {
+        targetX = lerp(targetX, handler.x, 0.3);
+        targetY = lerp(targetY, handler.y, 0.3);
       }
 
       moveToward(p, constrain(targetX,125,875), constrain(targetY,275,537.5), speed*0.8);
@@ -801,6 +874,7 @@ function moveToward(p, tx, ty, targetSpeed) {
 
   // 現在の速度で移動
   let a = atan2(ty-p.y, tx-p.x);
+  if(p.currentSpeed > 0.3) p.facingAngle = a; // 移動中のみ向きを更新
   p.x = constrain(p.x + cos(a)*p.currentSpeed, 25, 975);
   p.y = constrain(p.y + sin(a)*p.currentSpeed, 262.5, 550);
 }
@@ -818,26 +892,40 @@ function passTo(passer, receiver) {
 
 function shoot(s, tx, ty, is3pt) {
   s.hasBall = false; s.mustShoot = false; goalChecked = false; s.lock = 60;
-  let d = dist(s.x, s.y, tx, ty), t = map(d, 50, 300, 28, 45);
+  let d = dist(s.x, s.y, tx, ty);
   let acc = is3pt ? s.tpt : s.sht;
 
-  // 距離に応じた難易度：近いほど簡単、遠いほど難しい
-  let distanceFactor = map(d, 50, 250, 1.0, 3.0); // 近距離1.0倍、遠距離3.0倍（3.5から軽減）
+  // 飛行時間（距離に応じてフレーム数を決定）
+  let t = map(d, 50, 300, 25, 42);
 
-  // 3Pシュート時は能力が高いほど遠距離でも精度が高い
-  if(is3pt) {
-    let skillBonus = map(acc, 0, 100, 1.0, 0.25); // 能力が高いほど距離の影響を軽減
-    distanceFactor *= skillBonus;
-  }
+  // 能力ベースの誤差（大幅軽減：確実にゴールに向かう弾道）
+  let baseErr = map(acc, 0, 100, 6, 0.3);
+  let distanceFactor = map(d, 50, 250, 1.0, 2.0);
+  if(is3pt) { distanceFactor *= map(acc, 0, 100, 1.0, 0.3); }
+  let staminaFactor = (s.stamina/s.maxStamina * 0.2 + 0.8);
 
-  // 最終的な誤差：能力、距離、スタミナを考慮（精度向上）
-  let baseErr = map(acc, 0, 100, 10, 0.8); // 14,1.5から改善
-  let staminaFactor = (s.stamina/s.maxStamina * 0.3 + 0.7);
-  let err = baseErr * distanceFactor * staminaFactor;
+  // ディフェンダーが近いほど精度が下がる（コンテスト効果）
+  let contestFactor = 1.0;
+  let nearestDef = players.filter(p => p.team !== s.team)
+    .reduce((c, p) => dist(p.x,p.y,s.x,s.y) < dist(c.x,c.y,s.x,s.y) ? p : c, {x:9999,y:9999});
+  let defDist = dist(nearestDef.x, nearestDef.y, s.x, s.y);
+  if(defDist < 30) contestFactor = 1.8;
+  else if(defDist < 50) contestFactor = 1.3;
 
-  ball.vx = (tx + (s.team==="PlayerTeam"?5:-5) + random(-err, err) - ball.x) / t;
-  ball.vy = (ty + random(-err*0.4, err*0.4) - ball.y) / t;
-  ball.vz = (finalGoal.ringZ - ball.z + 0.5 * BALL_GRAVITY * t * t) / t;
+  let err = baseErr * distanceFactor * staminaFactor * contestFactor;
+
+  // シュートの方向オフセット（ゴール方向の微調整）
+  let dirX = s.team === "PlayerTeam" ? 3 : -3;
+  ball.vx = (tx + dirX + random(-err, err) - ball.x) / t;
+  ball.vy = (ty + random(-err*0.3, err*0.3) - ball.y) / t;
+
+  // 重力補正を正確に計算（離散物理の補正）
+  // 物理ステップあたりの実効重力: BALL_GRAVITY * 0.5, ステップ数: 2*t (2回/フレーム)
+  let totalSteps = t * 2;
+  let gravPerStep = BALL_GRAVITY * 0.5;
+  let targetZ = finalGoal.ringZ + 8; // リングより少し上を狙う（弧を描く）
+  ball.vz = ((targetZ - ball.z) / (totalSteps * 0.5)) + (gravPerStep * totalSteps * 0.5 * 0.5);
+
   ball.shooterTeam = s.team; ball.is3pt = is3pt; ball.lastTouch = s.team; ball.passTarget = null;
   for(let i=0;i<8;i++) particles.push({x:s.x,y:s.y-s.z-20,vx:random(-2,2),vy:random(-3,0),life:25,color:[255,255,0]});
 
@@ -846,12 +934,35 @@ function shoot(s, tx, ty, is3pt) {
 }
 
 function attemptSteal(stealer, handler) {
-  if(random(100) < stealer.stl - handler.pas * 0.3) {
+  if(random(100) < stealer.stl - handler.handling * 0.3) {
     handler.hasBall = false; stealer.hasBall = true;
     possession = stealer.team; shotClock = 24;
     addFloatingText(stealer.x, stealer.y - 40, "STEAL!", [0,255,100]);
   }
   stealer.lock = 40;
+}
+
+function attemptBlock(blocker, shooter) {
+  if(blocker.isJumping || blocker.lock > 0) return;
+  let d = dist(blocker.x, blocker.y, shooter.x, shooter.y);
+  if(d > 40) return;
+  // ブロック確率：ブロック能力＋身長＋ジャンプ力
+  let blockChance = map(blocker.blk, 0, 100, 0.01, 0.12);
+  blockChance *= map(blocker.height, 160, 230, 0.7, 1.3);
+  blockChance *= map(blocker.jmp, 0, 100, 0.8, 1.2);
+  if(random() < blockChance) {
+    // ブロック成功！
+    blocker.isJumping = true;
+    blocker.vz = sqrt(2 * map(blocker.jmp,0,100,40,90) * (BALL_GRAVITY * 0.5));
+    // ボールを弾く
+    ball.vx = (random() > 0.5 ? 1 : -1) * random(3, 6);
+    ball.vy = random(-3, 3);
+    ball.vz = random(1, 4);
+    ball.lastTouch = blocker.team;
+    ball.passTarget = null;
+    addFloatingText(blocker.x, blocker.y - 50, "BLOCK!", [255, 100, 255]);
+    blocker.lock = 30;
+  }
 }
 
 // ピック＆ロール（スクリーンプレイ）開始
@@ -1078,133 +1189,126 @@ function startThrowIn(team, x, y, reason) {
 }
 
 function startJumpBall() {
-  // 身長+ジャンプが最も高い選手を各チームから選出
   let playerTeamJumper = players.filter(p => p.team === "PlayerTeam")
     .sort((a, b) => (b.height + b.jmp) - (a.height + a.jmp))[0];
   let defenderTeamJumper = players.filter(p => p.team === "DefenderTeam")
     .sort((a, b) => (b.height + b.jmp) - (a.height + a.jmp))[0];
 
-  // ジャンプボール状態を設定
   jumpBallState = {
     jumper1: playerTeamJumper.id,
     jumper2: defenderTeamJumper.id,
-    phase: 0, // 0=上昇中、1=最高点、2=落下中
-    timer: 0
+    phase: 0, // 0=準備, 1=ボール上昇, 2=両者ジャンプ, 3=タップ, 4=ボール飛行
+    timer: 0,
+    winner: null,
+    tipTarget: null
   };
 
-  // ボールを中央に配置
-  ball.x = 500;
-  ball.y = 388.75;
-  ball.z = 0;
-  ball.vx = 0;
-  ball.vy = 0;
-  ball.vz = 0;
+  ball.x = 500; ball.y = 388.75; ball.z = 80;
+  ball.vx = 0; ball.vy = 0; ball.vz = 0;
 
-  addFloatingText(500, 350, "JUMP BALL!", [255, 255, 255]);
+  // 全選手をセンターサークル周囲に配置
+  let j1 = playerTeamJumper, j2 = defenderTeamJumper;
+  j1.x = 492; j1.y = 388.75; j1.z = 0; j1.vz = 0; j1.isJumping = false;
+  j2.x = 508; j2.y = 388.75; j2.z = 0; j2.vz = 0; j2.isJumping = false;
+
+  let otherBlue = players.filter(p => p.team === "PlayerTeam" && p.id !== j1.id);
+  let otherRed = players.filter(p => p.team === "DefenderTeam" && p.id !== j2.id);
+  let circlePos = [
+    {x:500,y:315}, {x:570,y:340}, {x:590,y:388.75}, {x:570,y:437.5},
+    {x:500,y:462.5}, {x:430,y:437.5}, {x:410,y:388.75}, {x:430,y:340}
+  ];
+  for(let i = 0; i < 4; i++) {
+    if(otherBlue[i]) { otherBlue[i].x = circlePos[i*2].x; otherBlue[i].y = circlePos[i*2].y; }
+    if(otherRed[i]) { otherRed[i].x = circlePos[i*2+1].x; otherRed[i].y = circlePos[i*2+1].y; }
+  }
+
+  addFloatingText(500, 340, "JUMP BALL!", [255, 255, 255]);
 }
 
 function updateJumpBall() {
   if(!jumpBallState) return;
-
   let j1 = players[jumpBallState.jumper1];
   let j2 = players[jumpBallState.jumper2];
-
-  // ジャンパーをセンターサークルに配置
-  j1.x = 490;
-  j1.y = 388.75;
-  j2.x = 510;
-  j2.y = 388.75;
-
-  // 他の選手をサークル外に交互に配置（青赤青赤...）
-  let otherPlayerTeam = players.filter(p => p.team === "PlayerTeam" && p.id !== j1.id);
-  let otherDefenderTeam = players.filter(p => p.team === "DefenderTeam" && p.id !== j2.id);
-
-  // 8つの位置（サークル外周）
-  let circlePositions = [
-    {x: 500, y: 320},    // 上
-    {x: 560, y: 340},    // 右上
-    {x: 585, y: 388.75}, // 右
-    {x: 560, y: 437.5},  // 右下
-    {x: 500, y: 457.5},  // 下
-    {x: 440, y: 437.5},  // 左下
-    {x: 415, y: 388.75}, // 左
-    {x: 440, y: 340}     // 左上
-  ];
-
-  // 交互に配置
-  for(let i = 0; i < 4; i++) {
-    if(otherPlayerTeam[i]) {
-      otherPlayerTeam[i].x = circlePositions[i * 2].x;
-      otherPlayerTeam[i].y = circlePositions[i * 2].y;
-    }
-    if(otherDefenderTeam[i]) {
-      otherDefenderTeam[i].x = circlePositions[i * 2 + 1].x;
-      otherDefenderTeam[i].y = circlePositions[i * 2 + 1].y;
-    }
-  }
-
   jumpBallState.timer++;
+  let t = jumpBallState.timer;
 
-  // ボールを上昇させる
   if(jumpBallState.phase === 0) {
-    ball.z = jumpBallState.timer * 4;
-    if(ball.z > 120) {
-      jumpBallState.phase = 1;
-    }
+    // 準備フェーズ：審判がボールを持っている演出（60フレーム=1秒）
+    ball.x = 500; ball.y = 388.75; ball.z = 80;
+    if(t > 60) { jumpBallState.phase = 1; jumpBallState.timer = 0; }
   }
-  // 最高点で選手がジャンプしてタッチ
   else if(jumpBallState.phase === 1) {
+    // ボール上昇：審判がトスアップ
+    ball.z = 80 + t * 3;
+    if(ball.z >= 180) { jumpBallState.phase = 2; jumpBallState.timer = 0; }
+  }
+  else if(jumpBallState.phase === 2) {
+    // 両選手がジャンプ
+    ball.z = 180;
+    let jumpHeight1 = map(j1.jmp, 0, 100, 25, 55);
+    let jumpHeight2 = map(j2.jmp, 0, 100, 25, 55);
+
+    j1.z = min(t * 3.5, jumpHeight1);
+    j2.z = min(t * 3.5, jumpHeight2);
     j1.isJumping = true;
     j2.isJumping = true;
-    j1.z = min(jumpBallState.timer - 30, 40);
-    j2.z = min(jumpBallState.timer - 30, 40);
 
-    if(jumpBallState.timer > 45) {
-      jumpBallState.phase = 2;
-      // どちらがボールを獲得するかは身長+ジャンプ力で判定
-      let j1Power = j1.height + j1.jmp + random(-10, 10);
-      let j2Power = j2.height + j2.jmp + random(-10, 10);
-      let winner = j1Power > j2Power ? j1 : j2;
+    if(t > 18) {
+      // 最高到達点で勝者決定：身長+ジャンプ力+ランダム
+      let reach1 = j1.height + j1.jmp * 0.8 + random(-15, 15);
+      let reach2 = j2.height + j2.jmp * 0.8 + random(-15, 15);
+      let winner = reach1 > reach2 ? j1 : j2;
+      jumpBallState.winner = winner;
 
-      // ボールをランダムな方向に弾く
-      let angle = random(0, TWO_PI);
-      ball.vx = cos(angle) * 3;
-      ball.vy = sin(angle) * 3;
-      ball.vz = -2;
+      // 勝者の最も近い味方を探す
+      let teammates = players.filter(p => p.team === winner.team && p.id !== winner.id);
+      let nearest = teammates.sort((a,b) => dist(a.x,a.y,500,388.75) - dist(b.x,b.y,500,388.75))[0];
+      jumpBallState.tipTarget = nearest;
+
+      // ボールを味方に向かってタップ
+      let ang = atan2(nearest.y - 388.75, nearest.x - 500);
+      ball.vx = cos(ang) * 5;
+      ball.vy = sin(ang) * 5;
+      ball.vz = -1.5;
       ball.lastTouch = winner.team;
+
+      addFloatingText(500, 330, winner.team === "PlayerTeam" ? "BLUE TIP!" : "RED TIP!",
+        winner.team === "PlayerTeam" ? [0,200,255] : [255,100,100]);
+      jumpBallState.phase = 3;
+      jumpBallState.timer = 0;
     }
   }
-  // ボールが落下して誰かが拾う
-  else if(jumpBallState.phase === 2) {
-    j1.z = max(0, j1.z - 2);
-    j2.z = max(0, j2.z - 2);
-    j1.isJumping = false;
-    j2.isJumping = false;
+  else if(jumpBallState.phase === 3) {
+    // 両者着地しつつボール飛行
+    j1.z = max(0, j1.z - 2.5);
+    j2.z = max(0, j2.z - 2.5);
+    if(j1.z <= 0) { j1.z = 0; j1.isJumping = false; }
+    if(j2.z <= 0) { j2.z = 0; j2.isJumping = false; }
 
-    // ボールの物理演算を適用（落下）
-    ball.vz -= BALL_GRAVITY * 0.5;
-    ball.x += ball.vx * 0.5;
-    ball.y += ball.vy * 0.5;
-    ball.z += ball.vz * 0.5;
+    // ボール物理
+    ball.vz -= BALL_GRAVITY * 0.4;
+    ball.x += ball.vx;
+    ball.y += ball.vy;
+    ball.z += ball.vz;
 
-    // 地面との衝突
-    if(ball.z <= 0) {
-      ball.z = 0;
-      ball.vz *= -0.55;
-      ball.vx *= 0.95;
-      ball.vy *= 0.95;
+    if(ball.z <= 0) { ball.z = 0; ball.vz *= -0.4; ball.vx *= 0.8; ball.vy *= 0.8; }
+
+    // タップターゲットがキャッチ、または誰かが拾う
+    let target = jumpBallState.tipTarget;
+    if(target && dist(target.x, target.y, ball.x, ball.y) < 40 && ball.z < 50) {
+      target.hasBall = true;
+      possession = target.team;
+      shotClock = 24;
+      jumpBallState = null;
+      return;
     }
 
-    // ボールが地面に近づいたら最も近い選手が拾う
-    if(ball.z < 20 && abs(ball.vz) < 1 && !players.find(p => p.hasBall)) {
-      let nearest = players.reduce((closest, p) => {
-        let d = dist(p.x, p.y, ball.x, ball.y);
-        let closestD = dist(closest.x, closest.y, ball.x, ball.y);
-        return d < closestD ? p : closest;
-      });
+    // ルーズボール拾い（タイムアウト安全策）
+    if(t > 90 || (ball.z < 15 && abs(ball.vz) < 0.5)) {
+      let nearest = players.reduce((c, p) => dist(p.x,p.y,ball.x,ball.y) < dist(c.x,c.y,ball.x,ball.y) ? p : c);
       nearest.hasBall = true;
       possession = nearest.team;
-      shotClock = 24 * 60;
+      shotClock = 24;
       jumpBallState = null;
     }
   }
@@ -1226,44 +1330,36 @@ function checkRebound(side) {
   // バックボードの中心X位置（跳ね返りの基準）
   let boardCenterX = (boardXMin + boardXMax) / 2;
 
-  // バックボードとの衝突判定（ボールが正面から来た場合のみ）
-  let isApproachingFromFront = side === 1 ? ball.vx > 0 : ball.vx < 0;
+  // バックボードとの衝突判定
+  let boardFaceX = side === 1 ? min(boardXMin, boardXMax) : max(boardXMin, boardXMax);
+  let isApproachingBoard = side === 1 ? ball.vx > 0 : ball.vx < 0;
 
-  if(isApproachingFromFront &&
-     ball.x > min(boardXMin, boardXMax) - 5 &&
-     ball.x < max(boardXMin, boardXMax) + 5 &&
-     ball.y > boardYMin - 5 &&
-     ball.y < boardYMax + 5 &&
-     ball.z > 60 && ball.z < 180) {
+  if(isApproachingBoard &&
+     abs(ball.x - boardFaceX) < 12 &&
+     ball.y > boardYMin - 8 &&
+     ball.y < boardYMax + 8 &&
+     ball.z > 70 && ball.z < 170) {
 
-    // バックボードの表面との衝突
-    let distToBoard = side === 1 ? ball.x - boardCenterX : boardCenterX - ball.x;
+    // 跳ね返り（コート内側に跳ね返す）
+    ball.vz *= 0.8;
+    ball.vy *= 0.85;
 
-    if(abs(distToBoard) < 8) {
-      // 跳ね返り（コート内側に跳ね返す）
-      ball.vz *= 0.85;
-      ball.vy *= 0.9;
-
-      // ボールをバックボードの前（コート内側）に押し戻す
-      if(side === 1) {
-        // 右側のゴール：X速度を負（左向き、内側）に
-        ball.vx = -abs(ball.vx) * BOUNCE_FACTOR;
-        ball.x = boardCenterX - 9;
-      } else {
-        // 左側のゴール：X速度を正（右向き、内側）に
-        ball.vx = abs(ball.vx) * BOUNCE_FACTOR;
-        ball.x = boardCenterX + 9;
-      }
+    if(side === 1) {
+      ball.vx = -abs(ball.vx) * 0.65;
+      ball.x = boardFaceX - 10;
+    } else {
+      ball.vx = abs(ball.vx) * 0.65;
+      ball.x = boardFaceX + 10;
     }
   }
 
-  // リングとの衝突判定
+  // リングとの衝突判定（リム部分のみ、通過部分を広く）
   let d = dist(ball.x, ball.y, rx, ry);
-  if(abs(ball.z - rz) < 12 && d > rs - 8 && d < rs + 10) {
+  if(abs(ball.z - rz) < 8 && d > rs - 3 && d < rs + 6) {
     let ang = atan2(ball.y - ry, ball.x - rx), spH = sqrt(ball.vx*ball.vx + ball.vy*ball.vy);
-    ball.vx = cos(ang) * (spH * BOUNCE_FACTOR + 1.5);
-    ball.vy = sin(ang) * (spH * BOUNCE_FACTOR + 1.5);
-    ball.vz = ball.vz < 0 ? abs(ball.vz) * BOUNCE_FACTOR + 1.5 : ball.vz * BOUNCE_FACTOR;
+    ball.vx = cos(ang) * (spH * BOUNCE_FACTOR + 1.0);
+    ball.vy = sin(ang) * (spH * BOUNCE_FACTOR + 1.0);
+    ball.vz = ball.vz < 0 ? abs(ball.vz) * BOUNCE_FACTOR + 1.0 : ball.vz * BOUNCE_FACTOR;
     goalChecked = false;
   }
 }
@@ -1272,8 +1368,16 @@ function updatePhysics() {
   if(throwInState) return;
   let holder = players.find(p => p.hasBall);
   if(holder) {
-    let dZ = holder.isJumping ? 0 : abs(sin(holder.dribblePhase)) * 20;
-    ball.x = holder.x; ball.y = holder.y; ball.z = holder.z + 45 - dZ;
+    // ドリブル：進行方向の前方でバウンドさせる
+    let dZ = holder.isJumping ? 0 : abs(sin(holder.dribblePhase)) * 22;
+    let dribbleOffsetX = 0, dribbleOffsetY = 0;
+    if(!holder.isJumping && holder.currentSpeed > 0.3) {
+      // 移動中は進行方向の前にボールを置く
+      dribbleOffsetX = cos(holder.facingAngle) * 10;
+      dribbleOffsetY = sin(holder.facingAngle) * 5; // パース補正（Y方向は半分）
+    }
+    ball.x = holder.x + dribbleOffsetX; ball.y = holder.y + dribbleOffsetY;
+    ball.z = holder.z + 45 - dZ;
     ball.vx = 0; ball.vy = 0; ball.vz = 0; ball.passTarget = null; ball.lastTouch = holder.team;
   } else {
     // 重力の適用
@@ -1326,7 +1430,7 @@ function updatePhysics() {
 function checkGoal(side, net) {
   let rx = side === 1 ? finalGoal.ringX : 1000 - finalGoal.ringX;
   let d = dist(ball.x, ball.y, rx, finalGoal.ringY);
-  if(ball.vz < 0 && ball.z < finalGoal.ringZ && ball.z > finalGoal.ringZ - 20 && d < finalGoal.ringSize / 1.1) {
+  if(ball.vz < 0 && ball.z < finalGoal.ringZ && ball.z > finalGoal.ringZ - 25 && d < finalGoal.ringSize * 0.55) {
     net.offsetX = ball.vx * 1.5; net.swing = 10; net.phase = 0;
     // 網による減速
     ball.vz *= 0.65;
