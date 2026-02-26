@@ -56,7 +56,7 @@ let players = [], ball, scorePlayer = 0, scoreDefender = 0, goalChecked = false;
 let gameTime = 720, quarter = 1, shotClock = 24, possession = null;
 let gameState = "playing", throwInState = null;
 let particles = [], floatingTexts = [];
-const NET_DAMPING = 0.85, BALL_GRAVITY = 0.45, BOUNCE_FACTOR = 0.72, AIR_RESISTANCE = 0.99;
+const NET_DAMPING = 0.85, BALL_GRAVITY = 0.45, BOUNCE_FACTOR = 0.72, AIR_RESISTANCE = 0.9995;
 let netRight = {offsetX:0,swing:0,phase:0}, netLeft = {offsetX:0,swing:0,phase:0};
 // クォーターごとのスコア記録 [Q1, Q2, Q3, Q4]
 let quarterScoresPlayer = [0, 0, 0, 0];
@@ -487,50 +487,52 @@ function updatePlayerAI(p) {
     let outnumbered = enemiesForward - alliesForward >= 2;
     let fastBreak = alliesForward > enemiesForward && dToGoal > 200; // 速攻チャンス
 
-    // パス頻度はポジション・状況・視野能力で決定
-    let passBaseRate = map(p.vision, 0, 100, 0.02, 0.07);
-    if(p.position === "PG") passBaseRate *= 1.6; // PGはパス多め
-    if(pressured) passBaseRate *= 2.0; // プレッシャー下ではパス増加
-    if(dominated) passBaseRate *= 3.0; // ダブルチーム時はパス必須
+    // パス頻度（大幅低減：パス過多を防止）
+    let passBaseRate = map(p.vision, 0, 100, 0.003, 0.012);
+    if(p.position === "PG") passBaseRate *= 1.3;
+    if(pressured) passBaseRate *= 1.5;
 
-    // ①カッティング選手へのパス（最優先）
-    let cuttingMate = teammates.find(t => t.isCutting && dist(p.x, p.y, t.x, t.y) < 250);
-    if(cuttingMate && random() < passBaseRate * 1.5) {
-      passTo(p, cuttingMate); return;
-    }
-
-    // ②オープンな味方へのパス（視野で検索範囲が広がる）
+    // オープンな味方を事前計算
     let searchRange = map(p.vision, 0, 100, 150, 350);
     let bestPass = null, bestScore = -999;
     for(let t of teammates) {
       if(dist(p.x, p.y, t.x, t.y) > searchRange) continue;
       let tDistToGoal = dist(t.x, t.y, tg.x, tg.y);
       let nearestDefToT = Math.min(...players.filter(d => d.team !== p.team).map(d => dist(d.x,d.y,t.x,t.y)));
-      let openness = min(nearestDefToT, 80); // オープン度
-      let closerToGoal = dToGoal - tDistToGoal; // ゴールに近づくか
+      let openness = min(nearestDefToT, 80);
+      let closerToGoal = dToGoal - tDistToGoal;
       let score = openness * 1.0 + closerToGoal * 0.5;
-      if(t.position === "SG" && tDistToGoal < 200) score += 20; // SG3P圏内優遇
-      if(t.position === "C" && tDistToGoal < 100) score += 25; // Cゴール下優遇
+      if(t.position === "SG" && tDistToGoal < 200) score += 20;
+      if(t.position === "C" && tDistToGoal < 100) score += 25;
       if(score > bestScore) { bestScore = score; bestPass = t; }
     }
-    if(bestPass && random() < passBaseRate && bestScore > 30) {
-      passTo(p, bestPass); return;
+
+    // ①ダブルチーム時：パス必須（最優先）
+    if(dominated) {
+      let cuttingMate = teammates.find(t => t.isCutting && dist(p.x, p.y, t.x, t.y) < 250);
+      if(cuttingMate) { passTo(p, cuttingMate); return; }
+      if(bestPass && bestScore > 20) { passTo(p, bestPass); return; }
+      let nearest = teammates.sort((a,b) => dist(p.x,p.y,a.x,a.y) - dist(p.x,p.y,b.x,b.y))[0];
+      if(nearest) { passTo(p, nearest); return; }
     }
 
-    // ③PGへの戻しパス（展開のため）
-    if(p.position !== "PG" && dToGoal > 150) {
-      let pgMate = teammates.find(t => t.position === "PG" && dist(p.x, p.y, t.x, t.y) < 250);
-      if(pgMate && pressured && random() < passBaseRate * 1.3) {
-        passTo(p, pgMate); return;
-      }
+    // ②シュート判断（高優先度 - ダブルチーム以外）
+    let shootDist = 160, shootChance = 0.08;
+    if(p.position === "SG") { shootDist = 220; shootChance = 0.12; }
+    else if(p.position === "SF") { shootDist = 190; shootChance = 0.09; }
+    else if(p.position === "C" || p.position === "PF") { shootDist = 130; shootChance = 0.12; }
+    else if(p.position === "PG") { shootDist = 200; shootChance = 0.06; }
+
+    if(!pressured && dToGoal < shootDist * 0.7) shootChance *= 2.5;
+    if(pressured) shootChance *= 0.7;
+
+    if(dToGoal < shootDist && random() < shootChance && !p.isJumping) {
+      p.isJumping = true; p.mustShoot = true;
+      p.vz = sqrt(2 * map(p.jmp,0,100,50,100) * (BALL_GRAVITY * 0.5));
+      return;
     }
 
-    // ④ピック&ロール開始（PG/SG主導）
-    if((p.position === "PG" || p.position === "SG") && random() < 0.015 && dToGoal < 250) {
-      initiateScreen(p);
-    }
-
-    // ⑤速攻：前方のフリーな味方にロングパス
+    // ③速攻：前方のフリーな味方にロングパス
     if(fastBreak) {
       p.speedMultiplier = SPEED_SPRINT;
       let fwdMate = teammates.find(t => {
@@ -542,6 +544,26 @@ function updatePlayerAI(p) {
       return;
     }
 
+    // ④ピック&ロール開始（PG/SG主導）
+    if((p.position === "PG" || p.position === "SG") && random() < 0.015 && dToGoal < 250) {
+      initiateScreen(p);
+    }
+
+    // ⑤通常パス（低頻度：カッティング、オープン味方、PG戻し）
+    let cuttingMate = teammates.find(t => t.isCutting && dist(p.x, p.y, t.x, t.y) < 250);
+    if(cuttingMate && random() < passBaseRate * 1.5) {
+      passTo(p, cuttingMate); return;
+    }
+    if(bestPass && random() < passBaseRate && bestScore > 50) {
+      passTo(p, bestPass); return;
+    }
+    if(p.position !== "PG" && dToGoal > 150) {
+      let pgMate = teammates.find(t => t.position === "PG" && dist(p.x, p.y, t.x, t.y) < 250);
+      if(pgMate && pressured && random() < passBaseRate) {
+        passTo(p, pgMate); return;
+      }
+    }
+
     // ⑥数的不利時：無理せず展開
     if(outnumbered && dToGoal > 150) {
       p.speedMultiplier = SPEED_JOG;
@@ -551,25 +573,7 @@ function updatePlayerAI(p) {
       return;
     }
 
-    // ⑦シュート判断（ポジション別・状況別）
-    let shootDist = 160, shootChance = 0.03;
-    if(p.position === "SG") { shootDist = 220; shootChance = 0.04; }
-    else if(p.position === "SF") { shootDist = 190; shootChance = 0.035; }
-    else if(p.position === "C" || p.position === "PF") { shootDist = 130; shootChance = 0.04; }
-    else if(p.position === "PG") { shootDist = 200; shootChance = 0.025; }
-
-    // プレッシャーなし＋射程内でシュート確率UP
-    if(!pressured && dToGoal < shootDist * 0.7) shootChance *= 2.0;
-    // ダブルチームされてたら無理に打たない
-    if(dominated) shootChance *= 0.2;
-
-    if(dToGoal < shootDist && random() < shootChance && !p.isJumping) {
-      p.isJumping = true; p.mustShoot = true;
-      p.vz = sqrt(2 * map(p.jmp,0,100,50,100) * (BALL_GRAVITY * 0.5));
-      return;
-    }
-
-    // ⑧ドライブ（ディフェンダー回避しながらゴールへ）
+    // ⑦ドライブ（ディフェンダー回避しながらゴールへ）
     p.speedMultiplier = pressured ? SPEED_RUN : SPEED_SPRINT;
     let avoidX = 0, avoidY = 0;
     players.filter(d=>d.team!==p.team).forEach(d => {
@@ -920,11 +924,13 @@ function shoot(s, tx, ty, is3pt) {
   ball.vy = (ty + random(-err*0.3, err*0.3) - ball.y) / t;
 
   // 重力補正を正確に計算（離散物理の補正）
-  // 物理ステップあたりの実効重力: BALL_GRAVITY * 0.5, ステップ数: 2*t (2回/フレーム)
+  // 物理: vz -= g, z += vz*0.5 を各ステップで実行
+  // n ステップ後の高さ: z0 + 0.5*(n*vz0 - g*n*(n+1)/2)
+  // vz0 = 2*(targetZ - z0)/n + g*(n+1)/2
   let totalSteps = t * 2;
   let gravPerStep = BALL_GRAVITY * 0.5;
-  let targetZ = finalGoal.ringZ + 8; // リングより少し上を狙う（弧を描く）
-  ball.vz = ((targetZ - ball.z) / (totalSteps * 0.5)) + (gravPerStep * totalSteps * 0.5 * 0.5);
+  let targetZ = finalGoal.ringZ + 3; // リング高さ付近に到達（弧を描いて落下）
+  ball.vz = 2 * (targetZ - ball.z) / totalSteps + gravPerStep * (totalSteps + 1) / 2;
 
   ball.shooterTeam = s.team; ball.is3pt = is3pt; ball.lastTouch = s.team; ball.passTarget = null;
   for(let i=0;i<8;i++) particles.push({x:s.x,y:s.y-s.z-20,vx:random(-2,2),vy:random(-3,0),life:25,color:[255,255,0]});
@@ -1265,11 +1271,11 @@ function updateJumpBall() {
       let nearest = teammates.sort((a,b) => dist(a.x,a.y,500,388.75) - dist(b.x,b.y,500,388.75))[0];
       jumpBallState.tipTarget = nearest;
 
-      // ボールを味方に向かってタップ
+      // ボールを味方に向かってタップ（速度を抑えて制御可能に）
       let ang = atan2(nearest.y - 388.75, nearest.x - 500);
-      ball.vx = cos(ang) * 5;
-      ball.vy = sin(ang) * 5;
-      ball.vz = -1.5;
+      ball.vx = cos(ang) * 2;
+      ball.vy = sin(ang) * 2;
+      ball.vz = -0.5;
       ball.lastTouch = winner.team;
 
       addFloatingText(500, 330, winner.team === "PlayerTeam" ? "BLUE TIP!" : "RED TIP!",
@@ -1383,10 +1389,9 @@ function updatePhysics() {
     // 重力の適用
     ball.vz -= BALL_GRAVITY * 0.5;
 
-    // 空気抵抗の適用
+    // 空気抵抗の適用（水平方向のみ：垂直方向は重力のみで制御）
     ball.vx *= AIR_RESISTANCE;
     ball.vy *= AIR_RESISTANCE;
-    ball.vz *= AIR_RESISTANCE;
 
     // 位置の更新
     ball.x += ball.vx * 0.5;
@@ -1398,6 +1403,7 @@ function updatePhysics() {
       let rcv = players[ball.passTarget];
       if(rcv && dist(rcv.x, rcv.y, ball.x, ball.y) < 35 && ball.z < 60) {
         rcv.hasBall = true;
+        rcv.lock = 25; // キャッチ後すぐにパスしないようロック
         ball.passTarget = null;
       }
     }
@@ -1430,7 +1436,7 @@ function updatePhysics() {
 function checkGoal(side, net) {
   let rx = side === 1 ? finalGoal.ringX : 1000 - finalGoal.ringX;
   let d = dist(ball.x, ball.y, rx, finalGoal.ringY);
-  if(ball.vz < 0 && ball.z < finalGoal.ringZ && ball.z > finalGoal.ringZ - 25 && d < finalGoal.ringSize * 0.55) {
+  if(ball.vz < 0 && ball.z < finalGoal.ringZ && ball.z > finalGoal.ringZ - 30 && d < finalGoal.ringSize * 0.65) {
     net.offsetX = ball.vx * 1.5; net.swing = 10; net.phase = 0;
     // 網による減速
     ball.vz *= 0.65;
