@@ -635,61 +635,80 @@ function updatePlayerAI(p) {
       let targetX, targetY;
       let side = p.team === "PlayerTeam" ? 1 : -1;
 
-      // 各ポジションの理想的なスポット（ゴール基準の相対位置）
+      // チームワーク値で理想位置への精度が変わる
+      let teamworkFactor = map(p.teamwork, 0, 100, 0.5, 1.0);
+
+      // NBAスタイル：各ポジションの理想的なスポット（コート端まで使用）
       if(pos === "PG") {
-        // PG: トップ・オブ・ザ・キー（ゴールから離れた中央）
-        targetX = tg.x - side * 160;
-        targetY = tg.y;
-        // ボール持ちが他にいる場合、ウイング寄りに移動
-        if(handler.position !== "PG") {
-          targetY = tg.y + (p.y > tg.y ? 40 : -40);
-        }
+        // PG: トップ・オブ・ザ・キー（ハーフコート付近、中央）
+        targetX = tg.x - side * 250;
+        targetY = tg.y + (handler.position === "PG" ? 0 : (p.y > tg.y ? 60 : -60));
         p.speedMultiplier = SPEED_JOG;
       } else if(pos === "SG") {
-        // SG: ウイング/3Pライン付近（得点圏）
-        let wingY = p.id % 2 === 0 ? tg.y - 80 : tg.y + 80; // 上下に散らばる
-        targetX = tg.x - side * 130;
-        targetY = wingY;
+        // SG: ウィング/コーナー（3Pライン外、コート端まで）
+        let toCorner = handler && dist(handler.x, handler.y, tg.x, tg.y) < 150;
+        if(toCorner) {
+          targetX = tg.x - side * 80; // コーナー3P
+          targetY = tg.y + (p.id % 2 === 0 ? -110 : 110);
+        } else {
+          targetX = tg.x - side * 200; // ウィング3P
+          targetY = tg.y + (p.id % 2 === 0 ? -90 : 90);
+        }
         p.speedMultiplier = SPEED_RUN;
       } else if(pos === "SF") {
-        // SF: 逆サイドのウイング（フロアを広く使う）
-        let wingY = p.id % 2 === 0 ? tg.y + 70 : tg.y - 70;
-        targetX = tg.x - side * 100;
-        targetY = wingY;
+        // SF: 逆サイドのウイング/コーナー（フロア全体を使用）
+        let cycle = (frameCount % 600) / 600;
+        let toWing = cycle > 0.5;
+        if(toWing) {
+          targetX = tg.x - side * 180;
+          targetY = tg.y + (p.id % 2 === 0 ? 95 : -95);
+        } else {
+          targetX = tg.x - side * 90;
+          targetY = tg.y + (p.id % 2 === 0 ? -105 : 105);
+        }
         p.speedMultiplier = SPEED_RUN;
       } else if(pos === "PF") {
-        // PF: ハイポスト/エルボー（中間地帯）
-        let cycle = (frameCount % 360) / 360;
-        let idealDist = 90 + sin(cycle * TWO_PI) * 40; // 内外を行き来
+        // PF: ハイポスト/エルボー/ミドルレンジ（広範囲を移動）
+        let cycle = (frameCount % 480) / 480;
+        let idealDist = 120 + sin(cycle * TWO_PI) * 60;
         targetX = tg.x - side * idealDist;
-        targetY = tg.y + (p.id % 2 === 0 ? -55 : 55);
+        targetY = tg.y + (p.id % 2 === 0 ? -70 : 70);
         p.speedMultiplier = SPEED_RUN;
       } else { // C
-        // C: ローポスト/ペイントエリア（ゴール近く）
-        targetX = tg.x - side * 50;
-        targetY = tg.y + (p.id % 2 === 0 ? 40 : -40);
+        // C: ローポスト/ハイポスト（動的にローテーション）
+        let cycle = (frameCount % 300) / 300;
+        let lowPost = cycle < 0.6;
+        if(lowPost) {
+          targetX = tg.x - side * 60;
+          targetY = tg.y + (p.id % 2 === 0 ? 50 : -50);
+        } else {
+          targetX = tg.x - side * 110;
+          targetY = tg.y;
+        }
         p.speedMultiplier = SPEED_JOG;
+      }
+
+      // チームワーク値が低いとランダムなずれ発生
+      if(teamworkFactor < 0.8) {
+        let noise = (1.0 - teamworkFactor) * 50;
+        targetX += random(-noise, noise);
+        targetY += random(-noise, noise);
       }
 
       // 他の味方との重なりを回避（フロアスペーシング）
       let myTeammates = players.filter(t => t.team === p.team && t.id !== p.id && t.id !== handler.id);
       for(let t of myTeammates) {
         let dd = dist(targetX, targetY, t.x, t.y);
-        if(dd < 60 && dd > 0) {
+        if(dd < 70 && dd > 0) { // スペース拡大（60→70）
           let pushAng = atan2(targetY - t.y, targetX - t.x);
-          targetX += cos(pushAng) * (60 - dd) * 0.5;
-          targetY += sin(pushAng) * (60 - dd) * 0.5;
-        }
+          let pushStrength = (70 - dd) * 0.6 * teamworkFactor; // チームワーク高いほど適切に散らばる
+          targetX += cos(pushAng) * pushStrength;
+          targetY += sin(pushAng) * pushStrength;
       }
 
-      // ハンドラーから離れすぎないように（パスが届く距離）
-      let distToHandler = dist(targetX, targetY, handler.x, handler.y);
-      if(distToHandler > 220) {
-        targetX = lerp(targetX, handler.x, 0.3);
-        targetY = lerp(targetY, handler.y, 0.3);
-      }
 
-      moveToward(p, constrain(targetX,125,875), constrain(targetY,275,537.5), speed*0.8);
+      // コート制約を緩和（端まで使用可能）
+      moveToward(p, constrain(targetX,50,950), constrain(targetY,260,550), speed*0.8);
     } else {
       // ボール保持者がいない場合（ルーズボール/リバウンド）
       if(ball.z < 80 && !players.some(pl=>pl.hasBall)) {
@@ -707,21 +726,37 @@ function updatePlayerAI(p) {
           }
         }
       } else {
-        // 理想的なオフェンスポジションへ移動
+        // 理想的なオフェンスポジションへ移動（コート全体を使用）
         p.speedMultiplier = SPEED_JOG;
         let pos = p.position;
         let idealX, idealY;
+        let teamworkFactor = map(p.teamwork, 0, 100, 0.6, 1.0);
+
         if(pos === "PG") {
-          idealX = p.team === "PlayerTeam" ? 400 : 600;
+          idealX = p.team === "PlayerTeam" ? 450 : 550;
           idealY = 388.75;
-        } else if(pos === "SG" || pos === "SF") {
-          idealX = p.team === "PlayerTeam" ? 650 : 350;
-          idealY = pos === "SG" ? 320 : 450;
-        } else {
+        } else if(pos === "SG") {
+          idealX = p.team === "PlayerTeam" ? 700 : 300;
+          idealY = p.id % 2 === 0 ? 300 : 480;
+        } else if(pos === "SF") {
+          idealX = p.team === "PlayerTeam" ? 680 : 320;
+          idealY = p.id % 2 === 0 ? 470 : 310;
+        } else if(pos === "PF") {
           idealX = p.team === "PlayerTeam" ? 750 : 250;
-          idealY = pos === "PF" ? 340 : 430;
+          idealY = p.id % 2 === 0 ? 340 : 440;
+        } else { // C
+          idealX = p.team === "PlayerTeam" ? 800 : 200;
+          idealY = p.id % 2 === 0 ? 350 : 430;
         }
-        moveToward(p, constrain(idealX,125,875), constrain(idealY,275,537.5), speed*0.5);
+
+        // チームワーク低いと位置がずれる
+        if(teamworkFactor < 0.8) {
+          let noise = (1.0 - teamworkFactor) * 50;
+          idealX += random(-noise, noise);
+          idealY += random(-noise, noise);
+        }
+
+        moveToward(p, constrain(idealX,50,950), constrain(idealY,260,550), speed*0.5);
       }
     }
   } else if(!isOffense) {
@@ -780,23 +815,24 @@ function updatePlayerAI(p) {
       if(mark) {
         // ファウルチェック
         checkFoul(p, mark);
-        // ポジション別のディフェンス重点
+        // ポジション別のディフェンス重点（チームワーク値で調整）
         let pos = p.position;
+        let teamworkFactor = map(p.teamwork, 0, 100, 0.6, 1.0);
         let markWeight, goalWeight, ballWeight;
 
         if(pos === "PG" || pos === "SG") {
-          // PG/SG: マークマンとボール保持者を重視（外周のプレッシャー）
-          markWeight = 0.4;
-          goalWeight = 0.3;
-          ballWeight = handler.id === mark.id ? 0.5 : 0.3;
+          // PG/SG: マークマンとボール保持者を重視（外周プレッシャー、コート端まで追う）
+          markWeight = 0.4 * teamworkFactor;
+          goalWeight = 0.2;
+          ballWeight = handler.id === mark.id ? 0.6 : 0.4;
         } else if(pos === "SF") {
-          // SF: バランス型
-          markWeight = 0.35;
-          goalWeight = 0.4;
-          ballWeight = handler.id === mark.id ? 0.5 : 0.25;
+          // SF: バランス型（フロア全体をカバー）
+          markWeight = 0.35 * teamworkFactor;
+          goalWeight = 0.35;
+          ballWeight = handler.id === mark.id ? 0.5 : 0.3;
         } else { // PF, C
           // PF/C: ゴールとリバウンドを重視（ペイントエリア防衛）
-          markWeight = 0.25;
+          markWeight = 0.25 * teamworkFactor;
           goalWeight = 0.6;
           ballWeight = handler.id === mark.id ? 0.4 : 0.15;
         }
@@ -806,11 +842,18 @@ function updatePlayerAI(p) {
         let defX = (mark.x * markWeight + og.x * goalWeight + handler.x * ballWeight) / totalWeight;
         let defY = (mark.y * markWeight + og.y * goalWeight + handler.y * ballWeight) / totalWeight;
 
-        // 守備側は自陣から出ないように制限（相手コートに行かない）
+        // チームワーク低いとディフェンス位置がずれる
+        if(teamworkFactor < 0.85) {
+          let noise = (1.0 - teamworkFactor) * 40;
+          defX += random(-noise, noise);
+          defY += random(-noise, noise);
+        }
+
+        // 守備側は自陣寄りに留まるが、コート端まで追う（制約を緩和）
         if(p.team === "PlayerTeam") {
-          defX = min(defX, 480); // 青チームは左側に留まる
+          defX = min(defX, 550); // 青チーム：左寄りだが中央付近まで（480→550）
         } else {
-          defX = max(defX, 520); // 赤チームは右側に留まる
+          defX = max(defX, 450); // 赤チーム：右寄りだが中央付近まで（520→450）
         }
 
         // マークマンとボール保持者に近い場合は全速力
