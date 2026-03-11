@@ -666,7 +666,7 @@ function updatePlayerAI(p) {
         let side = p.team === "PlayerTeam" ? 1 : -1;
         let tg = p.team === "PlayerTeam" ? {x:finalGoal.ringX, y:finalGoal.ringY} : {x:1000-finalGoal.ringX, y:finalGoal.ringY};
         let openX = tg.x - side * 200;
-        let openY = tg.y + (p.y > tg.y ? 80 : -80);
+        let openY = tg.y + (p.y > tg.y ? 120 : -120); // より離れたスペースへ
         p.speedMultiplier = SPEED_RUN;
         moveToward(p, openX, openY, speed * 0.7);
         return;
@@ -731,7 +731,7 @@ function updatePlayerAI(p) {
         // PG: 3Pライン外（トップオブザキー）
         if(handler && handler.position === "PG") {
           targetX = tg.x - side * 280; // 3Pライン外
-          targetY = tg.y + (p.y > tg.y ? 60 : -60);
+          targetY = tg.y + (p.y > tg.y ? 100 : -100); // 上下に広がる
           p.speedMultiplier = SPEED_JOG;
         } else {
           targetX = tg.x - side * 250; // 前進も3Pライン外
@@ -744,11 +744,11 @@ function updatePlayerAI(p) {
         if(handlerDist < 150) {
           // コーナー3P
           targetX = tg.x - side * 100;
-          targetY = tg.y + (p.id % 2 === 0 ? -120 : 120);
+          targetY = tg.y + (p.id % 2 === 0 ? -140 : 140); // コーナー広く
         } else {
           // ウィング3P
           targetX = tg.x - side * 260;
-          targetY = tg.y + (p.id % 2 === 0 ? -90 : 90);
+          targetY = tg.y + (p.id % 2 === 0 ? -120 : 120); // ウィング広く
         }
         p.speedMultiplier = SPEED_RUN;
       } else if(pos === "SF") {
@@ -768,10 +768,10 @@ function updatePlayerAI(p) {
         let toElbow = cycle > 0.6;
         if(toElbow) {
           targetX = tg.x - side * 90; // エルボー
-          targetY = tg.y + (p.id % 2 === 0 ? -80 : 80);
+          targetY = tg.y + (p.id % 2 === 0 ? -100 : 100); // エルボー広く
         } else {
           targetX = tg.x - side * 130; // ハイポスト
-          targetY = tg.y + (p.id % 2 === 0 ? -65 : 65);
+          targetY = tg.y + (p.id % 2 === 0 ? -85 : 85);
         }
         p.speedMultiplier = SPEED_RUN;
       } else { // C
@@ -780,7 +780,7 @@ function updatePlayerAI(p) {
         if(cycle < 0.7) {
           // ローポスト（ペイント内）
           targetX = tg.x - side * 55;
-          targetY = tg.y + (p.id % 2 === 0 ? 55 : -55);
+          targetY = tg.y + (p.id % 2 === 0 ? 75 : -75); // ローポスト広く
         } else {
           // ハイポスト
           targetX = tg.x - side * 100;
@@ -791,7 +791,7 @@ function updatePlayerAI(p) {
 
       // チームワーク値が低いとランダムなずれ発生
       if(teamworkFactor < 0.8) {
-        let noise = (1.0 - teamworkFactor) * 50;
+      let noise = (1.0 - teamworkFactor) * 40; // ずれを少し抑制
         targetX += random(-noise, noise);
         targetY += random(-noise, noise);
       }
@@ -800,7 +800,7 @@ function updatePlayerAI(p) {
       let myTeammates = players.filter(t => t.team === p.team && t.id !== p.id && (!handler || t.id !== handler.id));
       for(let t of myTeammates) {
         let dd = dist(targetX, targetY, t.x, t.y);
-        let minDist = 80; // 最小スペース拡大
+      let minDist = 120; // 最小スペース大幅拡大（密集防止）
         if(dd < minDist && dd > 0) {
           let pushAng = atan2(targetY - t.y, targetX - t.x);
           let pushStrength = (minDist - dd) * 0.7 * teamworkFactor;
@@ -812,9 +812,9 @@ function updatePlayerAI(p) {
       // ボールハンドラーとの距離も確保
       if(handler) {
         let handlerDist = dist(targetX, targetY, handler.x, handler.y);
-        if(handlerDist < 70) {
+        if(handlerDist < 100) { // ボール周りの密集防止
           let pushAng = atan2(targetY - handler.y, targetX - handler.x);
-          targetX += cos(pushAng) * (70 - handlerDist) * 0.8;
+          targetX += cos(pushAng) * (100 - handlerDist) * 0.8;
           targetY += sin(pushAng) * (70 - handlerDist) * 0.8;
         }
       }
@@ -1094,7 +1094,7 @@ function isPassSafe(passer, receiver) {
       let distToLine = dist(d.x, d.y, projX, projY);
       
       // 危険な距離：インターセプト能力を考慮
-      let interceptThreshold = map(d.steal, 0, 100, 35, 55);
+      let interceptThreshold = map(d.steal, 0, 100, 25, 40); // インターセプト難易度UP
       interceptThreshold *= map(d.speed, 0, 100, 0.8, 1.3);
       
       if(distToLine < interceptThreshold) {
