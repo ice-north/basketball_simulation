@@ -510,7 +510,7 @@ function updatePlayerAI(p) {
     // ①ダブルチーム時：パス必須（最優先）
     if(dominated) {
       let cuttingMate = teammates.find(t => t.isCutting && dist(p.x, p.y, t.x, t.y) < 250);
-      if(isPassSafe(p, cuttingMate)) { passTo(p, cuttingMate); return; }
+      if(cuttingMate && isPassSafe(p, cuttingMate)) { passTo(p, cuttingMate); return; }
       if(bestPass && isPassSafe(p, bestPass)) { passTo(p, bestPass); return; }
       let nearest = teammates.sort((a,b) => dist(p.x,p.y,a.x,a.y) - dist(p.x,p.y,b.x,b.y))[0];
       if(nearest && isPassSafe(p, nearest)) { passTo(p, nearest); return; }
@@ -1017,6 +1017,8 @@ function moveToward(p, tx, ty, targetSpeed) {
 
 function isPassSafe(passer, receiver) {
   // パスコースの安全性を評価
+  if(!receiver) return false; // receiverが存在しない場合は危険
+
   let passX1 = passer.x, passY1 = passer.y;
   let passX2 = receiver.x, passY2 = receiver.y;
   let passDist = dist(passX1, passY1, passX2, passY2);
