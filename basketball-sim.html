@@ -517,14 +517,14 @@ function updatePlayerAI(p) {
     }
 
     // ②シュート判断（高優先度 - ダブルチーム以外）
-    let shootDist = 160, shootChance = 0.08;
-    if(p.position === "SG") { shootDist = 220; shootChance = 0.12; }
-    else if(p.position === "SF") { shootDist = 190; shootChance = 0.09; }
-    else if(p.position === "C" || p.position === "PF") { shootDist = 130; shootChance = 0.12; }
-    else if(p.position === "PG") { shootDist = 200; shootChance = 0.06; }
+    let shootDist = 170, shootChance = 0.15; // 積極性UP
+    if(p.position === "SG") { shootDist = 240; shootChance = 0.22; } // SGは積極的にシュート
+    else if(p.position === "SF") { shootDist = 210; shootChance = 0.18; }
+    else if(p.position === "C" || p.position === "PF") { shootDist = 150; shootChance = 0.25; } // インサイドは高確率
+    else if(p.position === "PG") { shootDist = 220; shootChance = 0.14; } // PGも積極的に
 
-    if(!pressured && dToGoal < shootDist * 0.7) shootChance *= 2.5;
-    if(pressured) shootChance *= 0.7;
+    if(!pressured && dToGoal < shootDist * 0.8) shootChance *= 3.5; // ゴール近くは超積極的
+    if(pressured) shootChance *= 0.8; // プレッシャー時も少し積極的
 
     if(dToGoal < shootDist && random() < shootChance && !p.isJumping) {
       p.isJumping = true; p.mustShoot = true;
@@ -640,23 +640,33 @@ function updatePlayerAI(p) {
 
       // NBAスタイル：各ポジションの理想的なスポット（コート端まで使用）
       if(pos === "PG") {
-        // PG: トップ・オブ・ザ・キー（ハーフコート付近、中央）
-        targetX = tg.x - side * 250;
-        targetY = tg.y + (handler.position === "PG" ? 0 : (p.y > tg.y ? 60 : -60));
-        p.speedMultiplier = SPEED_JOG;
+        // PG: ボールハンドラーなら積極的に前進、そうでなければサポート位置
+        if(handler && handler.position === "PG") {
+          // 他のPGがハンドラーの場合はサポート
+          targetX = tg.x - side * 250;
+          targetY = tg.y + (p.y > tg.y ? 60 : -60);
+          p.speedMultiplier = SPEED_JOG;
+        } else {
+          // PGがボールを運ぶ：積極的に前進
+          targetX = tg.x - side * 180;
+          targetY = tg.y;
+          p.speedMultiplier = SPEED_RUN;
+        }
       } else if(pos === "SG") {
-        // SG: ウィング/コーナー（3Pライン外、コート端まで）
-        let toCorner = handler && dist(handler.x, handler.y, tg.x, tg.y) < 150;
-        if(toCorner) {
-          targetX = tg.x - side * 80; // コーナー3P
+        // SG: パスを受けられる位置（サポート）
+        let handlerDist = handler ? dist(handler.x, handler.y, tg.x, tg.y) : 999;
+        if(handlerDist < 200) {
+          // ハンドラーがゴール近くならコーナー3P
+          targetX = tg.x - side * 90;
           targetY = tg.y + (p.id % 2 === 0 ? -110 : 110);
         } else {
-          targetX = tg.x - side * 200; // ウィング3P
-          targetY = tg.y + (p.id % 2 === 0 ? -90 : 90);
+          // ハンドラーのサポート位置（パスを受けやすい）
+          targetX = tg.x - side * 220;
+          targetY = tg.y + (p.id % 2 === 0 ? -80 : 80);
         }
         p.speedMultiplier = SPEED_RUN;
       } else if(pos === "SF") {
-        // SF: 逆サイドのウイング/コーナー（フロア全体を使用）
+        // SF: 相手コートのスペースへ広がる
         let cycle = (frameCount % 600) / 600;
         let toWing = cycle > 0.5;
         if(toWing) {
@@ -713,18 +723,29 @@ function updatePlayerAI(p) {
     } else {
       // ボール保持者がいない場合（ルーズボール/リバウンド）
       if(ball.z < 80 && !players.some(pl=>pl.hasBall)) {
-        p.speedMultiplier = SPEED_SPRINT; // ルーズボールは全速力
-        moveToward(p, ball.x, ball.y, speed);
-        if(dist(p.x,p.y,ball.x,ball.y) < 30 && ball.z < 40 && p.lock <= 0) {
-          // リバウンド能力を考慮した獲得判定（オフェンスリバウンドは難しい）
-          let reboundChance = map(p.rebound, 0, 100, 0.2, 0.7);
-          reboundChance *= (1 + (p.jmp + p.power) / 400);
-          reboundChance *= map(p.height, 160, 230, 0.85, 1.15);
-
-          if(random() < reboundChance) {
-            p.hasBall = true; possession = p.team; shotClock = 24;
-            addFloatingText(p.x, p.y - 40, "OFF REBOUND!", [255, 200, 100]);
+        // チーム内で最も近い1-2人だけがルーズボールを追う
+        let teammates = players.filter(pl => pl.team === p.team);
+        let sortedByDist = teammates.sort((a, b) => 
+          dist(a.x, a.y, ball.x, ball.y) - dist(b.x, b.y, ball.x, ball.y));
+        let myRank = sortedByDist.findIndex(pl => pl.id === p.id);
+        
+        if(myRank < 2) { // 最も近い2人だけ追う
+          p.speedMultiplier = SPEED_SPRINT;
+          moveToward(p, ball.x, ball.y, speed);
+          if(dist(p.x,p.y,ball.x,ball.y) < 30 && ball.z < 40 && p.lock <= 0) {
+            let reboundChance = map(p.rebound, 0, 100, 0.2, 0.7);
+            reboundChance *= (1 + (p.jmp + p.power) / 400);
+            reboundChance *= map(p.height, 160, 230, 0.85, 1.15);
+            if(random() < reboundChance) {
+              p.hasBall = true; possession = p.team; shotClock = 24;
+              addFloatingText(p.x, p.y - 40, "OFF REBOUND!", [255, 200, 100]);
+            }
           }
+        } else {
+          // 他の選手は理想位置へ移動
+          let idealX = tg.x - (p.team === "PlayerTeam" ? 1 : -1) * 200;
+          let idealY = tg.y + (p.id % 3 - 1) * 80;
+          moveToward(p, constrain(idealX,50,950), constrain(idealY,260,550), speed*0.5);
         }
       } else {
         // 理想的なオフェンスポジションへ移動（コート全体を使用）
@@ -869,22 +890,28 @@ function updatePlayerAI(p) {
         if(mark.hasBall && dist(p.x,p.y,mark.x,mark.y) < 30 && random(100) < p.stl * 0.06 && p.lock <= 0) attemptSteal(p, mark);
       }
     } else if(ball.z < 80 && !players.some(pl=>pl.hasBall)) {
-      // ルーズボール/リバウンド：全速力で追う
-      p.speedMultiplier = SPEED_SPRINT;
-      moveToward(p, ball.x, ball.y, speed);
-      if(dist(p.x,p.y,ball.x,ball.y) < 30 && ball.z < 40 && p.lock <= 0) {
-        // リバウンド能力を考慮した獲得判定
-        let reboundChance = map(p.rebound, 0, 100, 0.3, 0.9);
-        // ジャンプ力とパワーも影響
-        reboundChance *= (1 + (p.jmp + p.power) / 400);
-        // 身長も影響
-        reboundChance *= map(p.height, 160, 230, 0.85, 1.15);
-
-        if(random() < reboundChance) {
-          p.hasBall = true; possession = p.team; shotClock = 24;
-          p.isBoxingOut = false;
-          addFloatingText(p.x, p.y - 40, "REBOUND!", [100, 255, 200]);
+      // ルーズボール/リバウンド：チーム内で最も近い2人だけが追う
+      let teammates = players.filter(pl => pl.team === p.team);
+      let sortedByDist = teammates.sort((a, b) => 
+        dist(a.x, a.y, ball.x, ball.y) - dist(b.x, b.y, ball.x, ball.y));
+      let myRank = sortedByDist.findIndex(pl => pl.id === p.id);
+      
+      if(myRank < 2) { // 最も近い2人だけ追う
+        p.speedMultiplier = SPEED_SPRINT;
+        moveToward(p, ball.x, ball.y, speed);
+        if(dist(p.x,p.y,ball.x,ball.y) < 30 && ball.z < 40 && p.lock <= 0) {
+          let reboundChance = map(p.rebound, 0, 100, 0.3, 0.9);
+          reboundChance *= (1 + (p.jmp + p.power) / 400);
+          reboundChance *= map(p.height, 160, 230, 0.85, 1.15);
+          if(random() < reboundChance) {
+            p.hasBall = true; possession = p.team; shotClock = 24;
+          }
         }
+      } else {
+        // 他の選手はディフェンス位置へ戻る
+        let defX = (p.team === "PlayerTeam" ? 875 : 125);
+        let defY = 400 + (p.id % 3 - 1) * 70;
+        moveToward(p, defX, defY, speed * 0.6);
       }
     } else {
       // ボール保持者がいない場合：守備位置へ小走り
@@ -907,6 +934,13 @@ function updatePlayerAI(p) {
 }
 
 function moveToward(p, tx, ty, targetSpeed) {
+  // 目標位置に十分近い場合は停止（震え防止）
+  let distToTarget = dist(p.x, p.y, tx, ty);
+  if(distToTarget < 3) {
+    p.currentSpeed = 0;
+    return;
+  }
+  
   // 瞬発力による滑らかな加速システム
   // 瞬発力が高いほど早くトップスピードに到達
   let accelerationRate = map(p.acceleration, 0, 100, 0.03, 0.15);
@@ -920,11 +954,16 @@ function moveToward(p, tx, ty, targetSpeed) {
     p.currentSpeed = max(targetSpeed, p.currentSpeed - accelerationRate * targetSpeed * 1.5);
   }
 
-  // 現在の速度で移動
+  // 現在の速度で移動（近距離は減速）
   let a = atan2(ty-p.y, tx-p.x);
   if(p.currentSpeed > 0.3) p.facingAngle = a; // 移動中のみ向きを更新
-  p.x = constrain(p.x + cos(a)*p.currentSpeed, 25, 975);
-  p.y = constrain(p.y + sin(a)*p.currentSpeed, 262.5, 550);
+
+  // 目標に近づくと自動的に減速（震え防止）
+  let dampingFactor = distToTarget < 20 ? map(distToTarget, 0, 20, 0.3, 1.0) : 1.0;
+  let actualSpeed = p.currentSpeed * dampingFactor;
+
+  p.x = constrain(p.x + cos(a)*actualSpeed, 25, 975);
+  p.y = constrain(p.y + sin(a)*actualSpeed, 262.5, 550);
 }
 
 function passTo(passer, receiver) {
