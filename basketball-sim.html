@@ -601,13 +601,13 @@ function updatePlayerAI(p) {
       if(p.offBallAction === "cut") {
         // ゴールへカット
         p.speedMultiplier = SPEED_SPRINT;
-        let tg = p.team === "PlayerTeam" ? goalR : goalL;
+        let tg = p.team === "PlayerTeam" ? {x:finalGoal.ringX, y:finalGoal.ringY} : {x:1000-finalGoal.ringX, y:finalGoal.ringY};
         moveToward(p, tg.x, tg.y + (p.id % 2 === 0 ? -40 : 40), speed);
         return;
       } else if(p.offBallAction === "space") {
         // オープンスペースへ移動
         let side = p.team === "PlayerTeam" ? 1 : -1;
-        let tg = p.team === "PlayerTeam" ? goalR : goalL;
+        let tg = p.team === "PlayerTeam" ? {x:finalGoal.ringX, y:finalGoal.ringY} : {x:1000-finalGoal.ringX, y:finalGoal.ringY};
         let openX = tg.x - side * 200;
         let openY = tg.y + (p.y > tg.y ? 80 : -80);
         p.speedMultiplier = SPEED_RUN;
