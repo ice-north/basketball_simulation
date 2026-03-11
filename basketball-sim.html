@@ -504,7 +504,8 @@ function updatePlayerAI(p) {
         p.state = "transition_defense";
         let backX = (p.team === "PlayerTeam" ? 350 : 650);
         let backY = 388.75 + (p.id % 3 - 1) * 50;
-        moveToward(p, backX, backY, speed * SPEED_SPRINT);
+        let transSpeed = p.spd * 0.045 * (p.stamina/p.maxStamina * 0.4 + 0.6) * SPEED_SPRINT;
+        moveToward(p, backX, backY, transSpeed);
         // 自陣に戻ったら通常ディフェンスへ
         if((p.team === "PlayerTeam" && p.x < halfCourt + 20) ||
            (p.team === "DefenderTeam" && p.x > halfCourt - 20)) {
