@@ -423,27 +423,56 @@ function updatePlayerAI(p) {
     return;
   }
 
-  // スローイン時：スロワーは指定位置へ、パスを出す。他の選手は受け取る位置へ
+  // スローイン時：スロワーは指定位置へ、パスを出す（5秒以内必須）
   if(throwInState && throwInState.thrower === p.id) {
-    p.speedMultiplier = SPEED_JOG; // スローインは小走り
+    p.speedMultiplier = SPEED_JOG;
+    p.hasBall = false; // スローイン中はドリブル禁止（バイオレーション防止）
+    
     moveToward(p, throwInState.x, throwInState.y, p.spd * 0.06);
+    
     if(dist(p.x, p.y, throwInState.x, throwInState.y) < 20) {
-      if(!p.hasBall) {
-        p.hasBall = true; ball.x = p.x; ball.y = p.y; ball.z = 45;
+      // タイマー初期化
+      if(!throwInState.timer) throwInState.timer = 0;
+      throwInState.timer++;
+      
+      // 5秒ルール（300フレーム = 5秒）
+      if(throwInState.timer > 300) {
+        // 5秒バイオレーション：相手ボールに
+        let newTeam = throwInState.team === "PlayerTeam" ? "DefenderTeam" : "PlayerTeam";
+        addFloatingText(throwInState.x, throwInState.y - 40, "5-SEC VIOLATION!", [255, 100, 100]);
+        startThrowIn(newTeam, throwInState.x, throwInState.y, "5-SEC VIOLATION");
+        return;
       }
-      // ボールを持ったら、近くの味方にパスを出す
-      if(p.hasBall && frameCount % 60 > 30) {
-        let teammates = players.filter(t => t.team === p.team && t.id !== p.id);
-        let nearest = teammates.sort((a,b) => dist(p.x,p.y,a.x,a.y) - dist(p.x,p.y,b.x,b.y))[0];
-        if(nearest && dist(p.x, p.y, nearest.x, nearest.y) < 300) {
-          if(nearest && isPassSafe(p, nearest)) { passTo(p, nearest); return; }
-          setTimeout(() => { if(throwInState) { possession = throwInState.team; throwInState = null; shotClock = 24; } }, 500);
+      
+      // 近くの味方にパスを出す（即座に判定）
+      let teammates = players.filter(t => t.team === p.team && t.id !== p.id);
+      // オープンな味方を優先
+      let openTeammates = teammates.filter(t => {
+        let nearDef = players.filter(d => d.team !== p.team && dist(d.x, d.y, t.x, t.y) < 50);
+        return nearDef.length === 0;
+      });
+      let target = openTeammates.length > 0 ? 
+        openTeammates.sort((a,b) => dist(p.x,p.y,a.x,a.y) - dist(p.x,p.y,b.x,b.y))[0] :
+        teammates.sort((a,b) => dist(p.x,p.y,a.x,a.y) - dist(p.x,p.y,b.x,b.y))[0];
+      
+      if(target && dist(p.x, p.y, target.x, target.y) < 250 && throwInState.timer > 30) {
+        if(isPassSafe(p, target)) {
+          // スローイン専用のパス処理
+          let d = dist(p.x, p.y, target.x, target.y);
+          let spd = 7, t = d / spd;
+          ball.x = p.x; ball.y = p.y; ball.z = 45;
+          ball.vx = (target.x - ball.x) / t;
+          ball.vy = (target.y - ball.y) / t;
+          ball.vz = 2.5;
+          ball.passTarget = target.id;
+          ball.lastTouch = p.team;
+          throwInState = null; // スローイン完了
+          return;
         }
       }
     }
     return;
   }
-  // スローイン時：スロワー以外の味方は受け取りやすい位置へ
   if(throwInState && p.team === throwInState.team && p.id !== throwInState.thrower) {
     p.speedMultiplier = SPEED_WALK; // 受け取る位置への微調整は歩き
     let thrower = players.find(pl => pl.id === throwInState.thrower);
@@ -460,6 +489,33 @@ function updatePlayerAI(p) {
   if(p.lock > 0) { p.lock--; }
   
   let isOffense = p.team === possession;
+  
+  // トランジションディフェンス：相手ボールになったら即座に自陣へ戻る
+  if(!isOffense && !p.hasBall) {
+    let ballHandler = players.find(pl => pl.hasBall);
+    if(ballHandler && ballHandler.team !== p.team) {
+      // 自陣のハーフコートより前にいる場合は戻る
+      let halfCourt = 500;
+      let isInOpponentHalf = (p.team === "PlayerTeam" && p.x > halfCourt) || 
+                              (p.team === "DefenderTeam" && p.x < halfCourt);
+      if(isInOpponentHalf) {
+        // 速やかに自陣へ戻る
+        p.speedMultiplier = SPEED_SPRINT;
+        p.state = "transition_defense";
+        let backX = (p.team === "PlayerTeam" ? 350 : 650);
+        let backY = 388.75 + (p.id % 3 - 1) * 50;
+        moveToward(p, backX, backY, speed * SPEED_SPRINT);
+        // 自陣に戻ったら通常ディフェンスへ
+        if((p.team === "PlayerTeam" && p.x < halfCourt + 20) ||
+           (p.team === "DefenderTeam" && p.x > halfCourt - 20)) {
+          // 戻り完了、通常ディフェンスへ
+        } else {
+          return; // 戻り中は他の行動をしない
+        }
+      }
+    }
+  }
+  
   let tg = p.team === "PlayerTeam" ? {x:finalGoal.ringX,y:finalGoal.ringY} : {x:1000-finalGoal.ringX,y:finalGoal.ringY};
   let og = p.team === "PlayerTeam" ? {x:1000-finalGoal.ringX,y:finalGoal.ringY} : {x:finalGoal.ringX,y:finalGoal.ringY};
   let baseSpeed = p.spd * 0.045 * (p.stamina/p.maxStamina * 0.4 + 0.6);
@@ -1376,10 +1432,19 @@ function startThrowIn(team, x, y, reason) {
 }
 
 function startJumpBall() {
-  let playerTeamJumper = players.filter(p => p.team === "PlayerTeam")
-    .sort((a, b) => (b.height + b.jmp) - (a.height + a.jmp))[0];
-  let defenderTeamJumper = players.filter(p => p.team === "DefenderTeam")
-    .sort((a, b) => (b.height + b.jmp) - (a.height + a.jmp))[0];
+  // センター優先でジャンプボール参加者を選択
+  let playerTeamC = players.find(p => p.team === "PlayerTeam" && p.position === "C");
+  let defenderTeamC = players.find(p => p.team === "DefenderTeam" && p.position === "C");
+  
+  // センターがいない場合はPF、さらにいなければ最も背が高い選手
+  let playerTeamJumper = playerTeamC || 
+    players.find(p => p.team === "PlayerTeam" && p.position === "PF") ||
+    players.filter(p => p.team === "PlayerTeam")
+      .sort((a, b) => (b.height + b.jmp) - (a.height + a.jmp))[0];
+  let defenderTeamJumper = defenderTeamC ||
+    players.find(p => p.team === "DefenderTeam" && p.position === "PF") ||
+    players.filter(p => p.team === "DefenderTeam")
+      .sort((a, b) => (b.height + b.jmp) - (a.height + a.jmp))[0];
 
   jumpBallState = {
     jumper1: playerTeamJumper.id,
