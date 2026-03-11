@@ -436,7 +436,7 @@ function updatePlayerAI(p) {
         let teammates = players.filter(t => t.team === p.team && t.id !== p.id);
         let nearest = teammates.sort((a,b) => dist(p.x,p.y,a.x,a.y) - dist(p.x,p.y,b.x,b.y))[0];
         if(nearest && dist(p.x, p.y, nearest.x, nearest.y) < 300) {
-          passTo(p, nearest);
+          if(nearest && isPassSafe(p, nearest)) { passTo(p, nearest); return; }
           setTimeout(() => { if(throwInState) { possession = throwInState.team; throwInState = null; shotClock = 24; } }, 500);
         }
       }
@@ -510,12 +510,21 @@ function updatePlayerAI(p) {
     // ①ダブルチーム時：パス必須（最優先）
     if(dominated) {
       let cuttingMate = teammates.find(t => t.isCutting && dist(p.x, p.y, t.x, t.y) < 250);
-      if(cuttingMate) { passTo(p, cuttingMate); return; }
-      if(bestPass && bestScore > 20) { passTo(p, bestPass); return; }
+      if(isPassSafe(p, cuttingMate)) { passTo(p, cuttingMate); return; }
+      if(bestPass && isPassSafe(p, bestPass)) { passTo(p, bestPass); return; }
       let nearest = teammates.sort((a,b) => dist(p.x,p.y,a.x,a.y) - dist(p.x,p.y,b.x,b.y))[0];
-      if(nearest) { passTo(p, nearest); return; }
+      if(nearest && isPassSafe(p, nearest)) { passTo(p, nearest); return; }
     }
 
+    
+    // ショットクロック急迫時は強制シュート
+    if(shotClock < 5 && dToGoal < 300) {
+      shootChance = 0.95; // ほぼ確実にシュート
+      shootDist = 300; // 距離制限緩和
+    } else if(shotClock < 8 && dToGoal < shootDist * 1.2) {
+      shootChance *= 2.0; // 積極的に
+    }
+    
     // ②シュート判断（高優先度 - ダブルチーム以外）
     let shootDist = 170, shootChance = 0.15; // 積極性UP
     if(p.position === "SG") { shootDist = 240; shootChance = 0.22; } // SGは積極的にシュート
@@ -539,7 +548,7 @@ function updatePlayerAI(p) {
         let isAhead = p.team === "PlayerTeam" ? t.x > p.x + 80 : t.x < p.x - 80;
         return isAhead && dist(t.x,t.y,tg.x,tg.y) < 200;
       });
-      if(fwdMate && random() < 0.05) { passTo(p, fwdMate); return; }
+      if(fwdMate && isPassSafe(p, fwdMate)) { passTo(p, fwdMate); return; }
       moveToward(p, tg.x, tg.y, speed * SPEED_SPRINT);
       return;
     }
@@ -552,22 +561,22 @@ function updatePlayerAI(p) {
     // ⑤通常パス（低頻度：カッティング、オープン味方、PG戻し）
     let cuttingMate = teammates.find(t => t.isCutting && dist(p.x, p.y, t.x, t.y) < 250);
     if(cuttingMate && random() < passBaseRate * 1.5) {
-      passTo(p, cuttingMate); return;
+      if(isPassSafe(p, cuttingMate)) { passTo(p, cuttingMate); return; }
     }
     if(bestPass && random() < passBaseRate && bestScore > 50) {
-      passTo(p, bestPass); return;
+      if(bestPass && isPassSafe(p, bestPass)) { passTo(p, bestPass); return; }
     }
     if(p.position !== "PG" && dToGoal > 150) {
       let pgMate = teammates.find(t => t.position === "PG" && dist(p.x, p.y, t.x, t.y) < 250);
       if(pgMate && pressured && random() < passBaseRate) {
-        passTo(p, pgMate); return;
+        if(pgMate && isPassSafe(p, pgMate)) { passTo(p, pgMate); return; }
       }
     }
 
     // ⑥数的不利時：無理せず展開
     if(outnumbered && dToGoal > 150) {
       p.speedMultiplier = SPEED_JOG;
-      if(bestPass && random() < 0.04) { passTo(p, bestPass); return; }
+      if(bestPass && isPassSafe(p, bestPass)) { passTo(p, bestPass); return; }
       let waitX = p.team === "PlayerTeam" ? p.x - 15 : p.x + 15;
       moveToward(p, waitX, p.y, speed * 0.4);
       return;
@@ -585,6 +594,28 @@ function updatePlayerAI(p) {
   } else if(isOffense && p.lock <= 0) {
     p.state = "support";
     p.speedMultiplier = SPEED_RUN; // オフェンスサポートは走る
+    
+    // オフボールアクション実行中
+    if(p.offBallTimer > 0) {
+      p.offBallTimer--;
+      if(p.offBallAction === "cut") {
+        // ゴールへカット
+        p.speedMultiplier = SPEED_SPRINT;
+        let tg = p.team === "PlayerTeam" ? goalR : goalL;
+        moveToward(p, tg.x, tg.y + (p.id % 2 === 0 ? -40 : 40), speed);
+        return;
+      } else if(p.offBallAction === "space") {
+        // オープンスペースへ移動
+        let side = p.team === "PlayerTeam" ? 1 : -1;
+        let tg = p.team === "PlayerTeam" ? goalR : goalL;
+        let openX = tg.x - side * 200;
+        let openY = tg.y + (p.y > tg.y ? 80 : -80);
+        p.speedMultiplier = SPEED_RUN;
+        moveToward(p, openX, openY, speed * 0.7);
+        return;
+      }
+    }
+    
     let handler = players.find(pl=>pl.hasBall);
     if(handler) {
       // スクリーン実行中
@@ -640,59 +671,62 @@ function updatePlayerAI(p) {
 
       // NBAスタイル：各ポジションの理想的なスポット（コート端まで使用）
       if(pos === "PG") {
-        // PG: ボールハンドラーなら積極的に前進、そうでなければサポート位置
+        // PG: 3Pライン外（トップオブザキー）
         if(handler && handler.position === "PG") {
-          // 他のPGがハンドラーの場合はサポート
-          targetX = tg.x - side * 250;
+          targetX = tg.x - side * 280; // 3Pライン外
           targetY = tg.y + (p.y > tg.y ? 60 : -60);
           p.speedMultiplier = SPEED_JOG;
         } else {
-          // PGがボールを運ぶ：積極的に前進
-          targetX = tg.x - side * 180;
+          targetX = tg.x - side * 250; // 前進も3Pライン外
           targetY = tg.y;
           p.speedMultiplier = SPEED_RUN;
         }
       } else if(pos === "SG") {
-        // SG: パスを受けられる位置（サポート）
+        // SG: 3Pライン外（ウィング/コーナー）
         let handlerDist = handler ? dist(handler.x, handler.y, tg.x, tg.y) : 999;
-        if(handlerDist < 200) {
-          // ハンドラーがゴール近くならコーナー3P
-          targetX = tg.x - side * 90;
-          targetY = tg.y + (p.id % 2 === 0 ? -110 : 110);
+        if(handlerDist < 150) {
+          // コーナー3P
+          targetX = tg.x - side * 100;
+          targetY = tg.y + (p.id % 2 === 0 ? -120 : 120);
         } else {
-          // ハンドラーのサポート位置（パスを受けやすい）
-          targetX = tg.x - side * 220;
-          targetY = tg.y + (p.id % 2 === 0 ? -80 : 80);
+          // ウィング3P
+          targetX = tg.x - side * 260;
+          targetY = tg.y + (p.id % 2 === 0 ? -90 : 90);
         }
         p.speedMultiplier = SPEED_RUN;
       } else if(pos === "SF") {
-        // SF: 相手コートのスペースへ広がる
+        // SF: ミッドレンジ〜ウィング（柔軟に動く）
         let cycle = (frameCount % 600) / 600;
-        let toWing = cycle > 0.5;
-        if(toWing) {
-          targetX = tg.x - side * 180;
-          targetY = tg.y + (p.id % 2 === 0 ? 95 : -95);
+        if(cycle > 0.5) {
+          targetX = tg.x - side * 220; // ウィング
+          targetY = tg.y + (p.id % 2 === 0 ? 100 : -100);
         } else {
-          targetX = tg.x - side * 90;
-          targetY = tg.y + (p.id % 2 === 0 ? -105 : 105);
+          targetX = tg.x - side * 140; // ミッドレンジ
+          targetY = tg.y + (p.id % 2 === 0 ? -90 : 90);
         }
         p.speedMultiplier = SPEED_RUN;
       } else if(pos === "PF") {
-        // PF: ハイポスト/エルボー/ミドルレンジ（広範囲を移動）
+        // PF: エルボー〜ハイポスト（ゴールに近い）
         let cycle = (frameCount % 480) / 480;
-        let idealDist = 120 + sin(cycle * TWO_PI) * 60;
-        targetX = tg.x - side * idealDist;
-        targetY = tg.y + (p.id % 2 === 0 ? -70 : 70);
+        let toElbow = cycle > 0.6;
+        if(toElbow) {
+          targetX = tg.x - side * 90; // エルボー
+          targetY = tg.y + (p.id % 2 === 0 ? -80 : 80);
+        } else {
+          targetX = tg.x - side * 130; // ハイポスト
+          targetY = tg.y + (p.id % 2 === 0 ? -65 : 65);
+        }
         p.speedMultiplier = SPEED_RUN;
       } else { // C
-        // C: ローポスト/ハイポスト（動的にローテーション）
+        // C: ペイント〜ローポスト（最もゴールに近い）
         let cycle = (frameCount % 300) / 300;
-        let lowPost = cycle < 0.6;
-        if(lowPost) {
-          targetX = tg.x - side * 60;
-          targetY = tg.y + (p.id % 2 === 0 ? 50 : -50);
+        if(cycle < 0.7) {
+          // ローポスト（ペイント内）
+          targetX = tg.x - side * 55;
+          targetY = tg.y + (p.id % 2 === 0 ? 55 : -55);
         } else {
-          targetX = tg.x - side * 110;
+          // ハイポスト
+          targetX = tg.x - side * 100;
           targetY = tg.y;
         }
         p.speedMultiplier = SPEED_JOG;
@@ -705,20 +739,30 @@ function updatePlayerAI(p) {
         targetY += random(-noise, noise);
       }
 
-      // 他の味方との重なりを回避（フロアスペーシング）
-      let myTeammates = players.filter(t => t.team === p.team && t.id !== p.id && t.id !== handler.id);
+      // 他の味方との重なりを回避（フロアスペーシング強化）
+      let myTeammates = players.filter(t => t.team === p.team && t.id !== p.id && (!handler || t.id !== handler.id));
       for(let t of myTeammates) {
         let dd = dist(targetX, targetY, t.x, t.y);
-        if(dd < 70 && dd > 0) { // スペース拡大（60→70）
+        let minDist = 80; // 最小スペース拡大
+        if(dd < minDist && dd > 0) {
           let pushAng = atan2(targetY - t.y, targetX - t.x);
-          let pushStrength = (70 - dd) * 0.6 * teamworkFactor; // チームワーク高いほど適切に散らばる
+          let pushStrength = (minDist - dd) * 0.7 * teamworkFactor;
           targetX += cos(pushAng) * pushStrength;
           targetY += sin(pushAng) * pushStrength;
         }
       }
 
+      // ボールハンドラーとの距離も確保
+      if(handler) {
+        let handlerDist = dist(targetX, targetY, handler.x, handler.y);
+        if(handlerDist < 70) {
+          let pushAng = atan2(targetY - handler.y, targetX - handler.x);
+          targetX += cos(pushAng) * (70 - handlerDist) * 0.8;
+          targetY += sin(pushAng) * (70 - handlerDist) * 0.8;
+        }
+      }
 
-      // コート制約を緩和（端まで使用可能）
+
       moveToward(p, constrain(targetX,50,950), constrain(targetY,260,550), speed*0.8);
     } else {
       // ボール保持者がいない場合（ルーズボール/リバウンド）
@@ -736,6 +780,11 @@ function updatePlayerAI(p) {
             let reboundChance = map(p.rebound, 0, 100, 0.2, 0.7);
             reboundChance *= (1 + (p.jmp + p.power) / 400);
             reboundChance *= map(p.height, 160, 230, 0.85, 1.15);
+            // ポジション別のボール獲得優先度
+            if(p.position === "C" || p.position === "PF") reboundChance *= 0.6; // ビッグマンは運ばない
+            if(p.position === "PG") reboundChance *= 1.4; // PG優先
+            if(p.position === "SG") reboundChance *= 1.2; // SG次点
+            
             if(random() < reboundChance) {
               p.hasBall = true; possession = p.team; shotClock = 24;
               addFloatingText(p.x, p.y - 40, "OFF REBOUND!", [255, 200, 100]);
@@ -966,6 +1015,42 @@ function moveToward(p, tx, ty, targetSpeed) {
   p.y = constrain(p.y + sin(a)*actualSpeed, 262.5, 550);
 }
 
+function isPassSafe(passer, receiver) {
+  // パスコースの安全性を評価
+  let passX1 = passer.x, passY1 = passer.y;
+  let passX2 = receiver.x, passY2 = receiver.y;
+  let passDist = dist(passX1, passY1, passX2, passY2);
+  
+  // パスコース上のディフェンダーをチェック
+  let defenders = players.filter(d => d.team !== passer.team);
+  for(let d of defenders) {
+    // ディフェンダーとパスラインの距離を計算
+    let lineX = passX2 - passX1;
+    let lineY = passY2 - passY1;
+    let dotProduct = ((d.x - passX1) * lineX + (d.y - passY1) * lineY) / (passDist * passDist);
+    
+    if(dotProduct > 0 && dotProduct < 1) { // ディフェンダーがパスライン上
+      let projX = passX1 + dotProduct * lineX;
+      let projY = passY1 + dotProduct * lineY;
+      let distToLine = dist(d.x, d.y, projX, projY);
+      
+      // 危険な距離：インターセプト能力を考慮
+      let interceptThreshold = map(d.steal, 0, 100, 35, 55);
+      interceptThreshold *= map(d.speed, 0, 100, 0.8, 1.3);
+      
+      if(distToLine < interceptThreshold) {
+        return false; // 危険なパス
+      }
+    }
+  }
+  
+  // レシーバーに近いディフェンダーもチェック
+  let nearReceiverDef = defenders.filter(d => dist(d.x, d.y, receiver.x, receiver.y) < 40);
+  if(nearReceiverDef.length >= 2) return false; // ダブルチーム状態への危険なパス
+  
+  return true; // 安全なパス
+}
+
 function passTo(passer, receiver) {
   passer.hasBall = false; passer.lock = 20;
   let d = dist(passer.x, passer.y, receiver.x, receiver.y);
@@ -975,6 +1060,17 @@ function passTo(passer, receiver) {
   ball.vz = map(d, 50, 300, 1.5, 4) + (BALL_GRAVITY * t * 0.2);
   ball.passTarget = receiver.id; ball.lastTouch = passer.team;
   for(let i=0;i<5;i++) particles.push({x:passer.x,y:passer.y-passer.z,vx:random(-1,1),vy:random(-2,0),life:20,color:[255,255,200]});
+  
+  // パス後の動き：Give & Go または スペーシング
+  if(random() < 0.35 && passer.position !== "C") { // Cは動きが遅いのでカットしない
+    // Give & Go: ゴールに向かってカット
+    passer.offBallAction = "cut";
+    passer.offBallTimer = 90;
+  } else {
+    // スペーシング調整：オープンスペースへ移動
+    passer.offBallAction = "space";
+    passer.offBallTimer = 60;
+  }
 }
 
 function shoot(s, tx, ty, is3pt) {
