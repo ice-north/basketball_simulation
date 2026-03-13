@@ -56,7 +56,7 @@ let players = [], ball, scorePlayer = 0, scoreDefender = 0, goalChecked = false;
 let gameTime = 720, quarter = 1, shotClock = 24, possession = null;
 let gameState = "playing", throwInState = null;
 let particles = [], floatingTexts = [];
-const NET_DAMPING = 0.85, BALL_GRAVITY = 0.45, BOUNCE_FACTOR = 0.72, AIR_RESISTANCE = 0.9995;
+const NET_DAMPING = 0.85, BALL_GRAVITY = 0.4275, BOUNCE_FACTOR = 0.72, AIR_RESISTANCE = 0.9995; // ボール重力5%減
 let netRight = {offsetX:0,swing:0,phase:0}, netLeft = {offsetX:0,swing:0,phase:0};
 // クォーターごとのスコア記録 [Q1, Q2, Q3, Q4]
 let quarterScoresPlayer = [0, 0, 0, 0];
@@ -65,7 +65,7 @@ let lastScorePlayer = 0, lastScoreDefender = 0;
 // ジャンプボール状態
 let jumpBallState = null;
 const positions = ["PG","SG","SF","PF","C"];
-const SPEED_WALK = 0.3, SPEED_JOG = 0.6, SPEED_RUN = 1.0, SPEED_SPRINT = 1.5;
+const SPEED_WALK = 0.285, SPEED_JOG = 0.57, SPEED_RUN = 0.95, SPEED_SPRINT = 1.425; // 5%減速
 // ゲーム速度
 let gameSpeed = 1;
 // 戦略システム
@@ -795,6 +795,22 @@ function updatePlayerAI(p) {
         targetX += random(-noise, noise);
         targetY += random(-noise, noise);
       }
+      // フロアバランス認識：チーム全体の配置を考慮
+      let teammates = players.filter(pl => pl.team === p.team && pl.id !== p.id && !pl.hasBall);
+      let leftSide = teammates.filter(t => t.x < 500).length;
+      let rightSide = teammates.filter(t => t.x >= 500).length;
+      let topSide = teammates.filter(t => t.y < 388.75).length;
+      let bottomSide = teammates.filter(t => t.y >= 388.75).length;
+
+      // バランスが悪い場合、空いている方向へ移動
+      let balanceAdjustX = 0, balanceAdjustY = 0;
+      if(Math.abs(leftSide - rightSide) > 2) {
+        balanceAdjustX = (leftSide > rightSide ? 1 : -1) * 40;
+      }
+      if(Math.abs(topSide - bottomSide) > 2) {
+        balanceAdjustY = (topSide > bottomSide ? 1 : -1) * 40;
+      }
+
 
       // 他の味方との重なりを回避（フロアスペーシング強化）
       let myTeammates = players.filter(t => t.team === p.team && t.id !== p.id && (!handler || t.id !== handler.id));
@@ -995,6 +1011,18 @@ function updatePlayerAI(p) {
         moveToward(p, defX, defY, speed*0.75);
         if(mark.hasBall && dist(p.x,p.y,mark.x,mark.y) < 30 && random(100) < p.stl * 0.06 && p.lock <= 0) attemptSteal(p, mark);
       }
+    } else if(p.transitionDefense && p.transitionTimer > 0) {
+      // トランジションディフェンス：素早く自陣へ戻る
+      p.transitionTimer--;
+      p.speedMultiplier = SPEED_SPRINT;
+      let pos = p.position;
+      let defX = (p.team === "PlayerTeam" ? 200 : 800);
+      let defY = 388.75 + (p.id % 5 - 2) * 80;
+      moveToward(p, defX, defY, speed);
+
+      if(p.transitionTimer <= 0) {
+        p.transitionDefense = false;
+      }
     } else if(ball.z < 80 && !players.some(pl=>pl.hasBall)) {
       // ルーズボール/リバウンド：チーム内で最も近い2人だけが追う
       let teammates = players.filter(pl => pl.team === p.team);
@@ -1047,6 +1075,23 @@ function moveToward(p, tx, ty, targetSpeed) {
     return;
   }
   
+  // 選手同士の衝突判定（重なり防止）
+  for(let other of players) {
+    if(other.id === p.id) continue;
+    let d = dist(p.x, p.y, other.x, other.y);
+    let minDist = 20; // 最小距離
+    if(d < minDist && d > 0) {
+      // 押し出し（衝突回避）
+      let pushAngle = atan2(p.y - other.y, p.x - other.x);
+      let pushForce = (minDist - d) * 0.3;
+      p.x += cos(pushAngle) * pushForce;
+      p.y += sin(pushAngle) * pushForce;
+      // コート内に制限
+      p.x = constrain(p.x, 25, 975);
+      p.y = constrain(p.y, 262.5, 550);
+    }
+  }
+
   // 瞬発力による滑らかな加速システム
   // 瞬発力が高いほど早くトップスピードに到達
   let accelerationRate = map(p.acceleration, 0, 100, 0.03, 0.15);
@@ -1094,7 +1139,7 @@ function isPassSafe(passer, receiver) {
       let distToLine = dist(d.x, d.y, projX, projY);
       
       // 危険な距離：インターセプト能力を考慮
-      let interceptThreshold = map(d.steal, 0, 100, 25, 40); // インターセプト難易度UP
+      let interceptThreshold = map(d.steal, 0, 100, 35, 55); // 危険ゾーン拡大
       interceptThreshold *= map(d.speed, 0, 100, 0.8, 1.3);
       
       if(distToLine < interceptThreshold) {
@@ -1104,8 +1149,10 @@ function isPassSafe(passer, receiver) {
   }
   
   // レシーバーに近いディフェンダーもチェック
-  let nearReceiverDef = defenders.filter(d => dist(d.x, d.y, receiver.x, receiver.y) < 40);
-  if(nearReceiverDef.length >= 2) return false; // ダブルチーム状態への危険なパス
+  let nearReceiverDef = defenders.filter(d => dist(d.x, d.y, receiver.x, receiver.y) < 50); // レシーバー付近のディフェンス判定拡大
+  if(nearReceiverDef.length >= 2) return false; // ダブルチームへのパス禁止
+  if(nearReceiverDef.length >= 1 && passDist > 200) return false; // 遠距離パスで敵が近い場合禁止
+
   
   return true; // 安全なパス
 }
@@ -1181,6 +1228,14 @@ function attemptSteal(stealer, handler) {
   if(random(100) < stealer.stl - handler.handling * 0.3) {
     handler.hasBall = false; stealer.hasBall = true;
     possession = stealer.team; shotClock = 24;
+
+    // 攻守切り替え：即座にディフェンスへ移行
+    players.forEach(pl => {
+      if(pl.team !== stealer.team) {
+        pl.transitionDefense = true;
+        pl.transitionTimer = 120; // 2秒間トランジションモード
+      }
+    });
     addFloatingText(stealer.x, stealer.y - 40, "STEAL!", [0,255,100]);
   }
   stealer.lock = 40;
@@ -1684,9 +1739,12 @@ function checkGoal(side, net) {
   let rx = side === 1 ? finalGoal.ringX : 1000 - finalGoal.ringX;
   let d = dist(ball.x, ball.y, rx, finalGoal.ringY);
   if(ball.vz < 0 && ball.z < finalGoal.ringZ && ball.z > finalGoal.ringZ - 30 && d < finalGoal.ringSize * 0.65) {
-    net.offsetX = ball.vx * 1.5; net.swing = 10; net.phase = 0;
+    net.offsetX = ball.vx * 2.0; net.swing = 15; net.phase = 0; // ネットの揺れ増加
+    // ネットによるボール減速（よりリアルに）
+    ball.vx *= 0.35;
+    ball.vy *= 0.35;
     // 網による減速
-    ball.vz *= 0.65;
+    ball.vz *= 0.25; // ネットで大幅減速（リアルな落下）
     if(!goalChecked && ball.z < finalGoal.ringZ - 5) {
       let pts = ball.is3pt ? 3 : 2;
       if(side === 1) {
