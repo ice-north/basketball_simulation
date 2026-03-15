@@ -160,6 +160,7 @@ function initPlayers() {
       isClosingOut: false,
       closeoutTarget: null,
       switchedDefense: null,
+      switchTimer: 0,
       jumpShooting: false,
       jumpShootPhase: 0,
       jumpShootTarget: null,
@@ -393,6 +394,15 @@ function drawPlayer(p) {
   }
 
 
+
+  // Countdown switch timer
+  if(p.switchTimer && p.switchTimer > 0) {
+    p.switchTimer--;
+    if(p.switchTimer <= 0) {
+      p.switchedDefense = null;
+    }
+  }
+
   // Defensive switching on screens (NBA fundamental)
   if(p.team !== ball.lastTouch) { // Defender
     let nearScreens = players.filter(s =>
@@ -405,7 +415,7 @@ function drawPlayer(p) {
       if(!p.switchedDefense) {
         p.switchedDefense = screener;
         // Switch for 3 seconds
-        setTimeout(() => { p.switchedDefense = null; }, 3000);
+        p.switchTimer = 180; // 3 seconds = 180 frames
       }
     }
   }
@@ -879,7 +889,7 @@ function updatePlayerAI(p) {
       moveToward(p, constrain(targetX,50,950), constrain(targetY,260,550), speed*0.8);
     } else {
       // ボール保持者がいない場合（ルーズボール/リバウンド）
-      if(ball.z < 80 && !players.some(pl=>pl.hasBall)) {
+      if(ball.z < 80 && !players.some(pl=>pl.hasBall) && !ball.reboundClaimed) {
         // チーム内で最も近い1-2人だけがルーズボールを追う
         let teammates = players.filter(pl => pl.team === p.team);
         let sortedByDist = teammates.sort((a, b) => 
@@ -898,6 +908,7 @@ function updatePlayerAI(p) {
             if(p.position === "SG") reboundChance *= 1.2; // SG次点
             if(random() < reboundChance) {
               p.hasBall = true; possession = p.team; shotClock = 24;
+              ball.reboundClaimed = true; // Prevent multiple rebounds
 
               // リバウンド後：即座にPGへパス
               if(p.position !== "PG") {
@@ -930,6 +941,7 @@ function updatePlayerAI(p) {
           moveToward(p, constrain(idealX,50,950), constrain(idealY,260,550), speed*0.5);
         }
       } else {
+        let pos = p.position; // Define position
         // Constant off-ball motion
         if(!p.motionTimer || p.motionTimer <= 0) {
           p.motionTimer = 120;
@@ -954,7 +966,7 @@ function updatePlayerAI(p) {
 
         // 理想的なオフェンスポジションへ移動（コート全体を使用）
         p.speedMultiplier = SPEED_JOG;
-        let pos = p.position;
+        // pos already defined above
         let idealX, idealY;
         let teamworkFactor = map(p.teamwork, 0, 100, 0.6, 1.0);
 
@@ -1354,6 +1366,7 @@ function passTo(passer, receiver) {
 }
 
 function shoot(s, tx, ty, is3pt) {
+  ball.reboundClaimed = false; // Reset for new shot
   if(!s.jumpShooting) {
     s.jumpShooting = true;
     s.jumpShootPhase = 0;
