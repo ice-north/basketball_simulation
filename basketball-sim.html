@@ -135,6 +135,13 @@ function initPlayers() {
       prevY: 350+((i%5)*43.75),
       hasBall: false, lock: 0, isJumping: false, size: 25,
       reboundJumping: false, // リバウンドジャンプ中
+      // ポストプレイ状態
+      postingUp: false,           // ポストアップ中
+      postPosition: 0,            // ポジション品質 (0-100)
+      requestingPass: false,      // パス要求中
+      postPushStrength: 0,        // 押し込み強度
+      postMoveType: null,         // ポストムーブタイプ
+      postMoveTimer: 0,           // ムーブタイマー
       reboundJumpTimer: 0,
       boxOutStrength: 0, // ボックスアウトの強さ
       state: "idle", dribblePhase: 0, mustShoot: false,
@@ -965,6 +972,23 @@ function updatePlayerAI(p) {
       p.speedMultiplier = SPEED_JOG; // マークは小走り
       // 同じポジションの相手選手をマーク
       let mark = players.filter(t=>t.team!==p.team)[p.id%5];
+
+      // ポストディフェンス：押し返し
+      if(mark && mark.postingUp) {
+        let offensivePower = mark.power + mark.post * 0.6 + mark.strength * 0.4;
+        let defensivePower = p.power + p.def * 0.4 + p.strength * 0.6;
+        let powerDiff = (defensivePower - offensivePower) / 150;
+
+        if(powerDiff > 0.1) {
+          // ディフェンスが強い：オフェンスを押し出す
+          let og = p.team === "PlayerTeam" ? {x:finalGoal.ringX, y:finalGoal.ringY} : {x:1000-finalGoal.ringX, y:finalGoal.ringY};
+          let pushAngle = atan2(mark.y - og.y, mark.x - og.x);
+          mark.x += cos(pushAngle) * powerDiff * 2.5;
+          mark.y += sin(pushAngle) * powerDiff * 2.5;
+          mark.x = constrain(mark.x, 25, 975);
+          mark.y = constrain(mark.y, 262.5, 550);
+        }
+      }
       if(mark) {
         // ファウルチェック
         checkFoul(p, mark);
