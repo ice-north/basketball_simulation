@@ -142,6 +142,16 @@ function initPlayers() {
       postPushStrength: 0,        // 押し込み強度
       postMoveType: null,         // ポストムーブタイプ
       postMoveTimer: 0,           // ムーブタイマー
+      // スクリーンプレイ状態
+      settingScreen: false,       // スクリーン中
+      screenTarget: null,         // スクリーン対象（ディフェンダー）
+      usingScreen: false,         // スクリーン使用中
+      screenTimer: 0,             // スクリーンタイマー
+      screenType: null,           // "pick" or "off-ball"
+      // 1対1状態
+      isolationMode: false,       // アイソレーション中
+      dribbleMoveType: null,      // "crossover", "hesitation", "behind"
+      dribbleMoveTimer: 0,        // ドリブルムーブタイマー
       reboundJumpTimer: 0,
       boxOutStrength: 0, // ボックスアウトの強さ
       state: "idle", dribblePhase: 0, mustShoot: false,
@@ -1169,7 +1179,7 @@ function moveToward(p, tx, ty, targetSpeed) {
   for(let other of players) {
     if(other.id === p.id) continue;
     let d = dist(p.x, p.y, other.x, other.y);
-    let minDist = 20; // 最小距離
+    let minDist = 35; // 最小距離拡大（スクリーン用）
     if(d < minDist && d > 0) {
       // 押し出し（衝突回避）
       let pushAngle = atan2(p.y - other.y, p.x - other.x);
