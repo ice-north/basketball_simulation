@@ -156,6 +156,10 @@ function initPlayers() {
       dribbleMoveType: null,      // "crossover", "hesitation", "behind"
       dribbleMoveTimer: 0,        // ドリブルムーブタイマー
       // NBA Realism states
+      // Defense states
+      isClosingOut: false,
+      closeoutTarget: null,
+      switchedDefense: null,
       jumpShooting: false,
       jumpShootPhase: 0,
       jumpShootTarget: null,
@@ -386,6 +390,24 @@ function drawPlayer(p) {
   if(p.isJumping && p.z > 5) {
     stroke(255,255,255,60); strokeWeight(1);
     line(p.x, p.y, p.x, p.y - p.z);
+  }
+
+
+  // Defensive switching on screens (NBA fundamental)
+  if(p.team !== ball.lastTouch) { // Defender
+    let nearScreens = players.filter(s =>
+      s.team !== p.team && s.isScreening &&
+      dist(p.x, p.y, s.x, s.y) < 40
+    );
+    if(nearScreens.length > 0) {
+      // Switch assignment temporarily
+      let screener = nearScreens[0];
+      if(!p.switchedDefense) {
+        p.switchedDefense = screener;
+        // Switch for 3 seconds
+        setTimeout(() => { p.switchedDefense = null; }, 3000);
+      }
+    }
   }
 
   // スクリーン中の表示
@@ -632,7 +654,7 @@ function updatePlayerAI(p) {
     }
 
     // ④ピック&ロール開始（PG/SG主導）
-    if((p.position === "PG" || p.position === "SG") && random() < 0.015 && dToGoal < 250) {
+    if((p.position === "PG" || p.position === "SG") && random() < 0.30 && dToGoal < 250 && !dominated) {
       initiateScreen(p);
     }
 
@@ -1168,7 +1190,7 @@ function updatePlayerAI(p) {
             reboundChance *= map(p.power, 0, 100, 0.85, 1.2);
 
             // ボックスアウト強度ボーナス
-            reboundChance *= (1 + p.boxOutStrength * 0.05);
+      reboundChance *= (1 + p.boxOutStrength * 0.15); // Stronger box-out impact
 
             // 近くの競合者がいると難易度UP
             let nearbyContestants = players.filter(pl =>
