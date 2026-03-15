@@ -152,6 +152,11 @@ function initPlayers() {
       isolationMode: false,       // アイソレーション中
       dribbleMoveType: null,      // "crossover", "hesitation", "behind"
       dribbleMoveTimer: 0,        // ドリブルムーブタイマー
+      // PG専用状態
+      bringingBallUp: false,      // ボール運び中
+      ballAdvanceTarget: null,    // ボール運びの目標位置
+      isPlaymaker: false,         // プレイメイカーモード
+      inTransition: false,        // トランジション中
       reboundJumpTimer: 0,
       boxOutStrength: 0, // ボックスアウトの強さ
       state: "idle", dribblePhase: 0, mustShoot: false,
@@ -861,6 +866,28 @@ function updatePlayerAI(p) {
             if(p.position === "SG") reboundChance *= 1.2; // SG次点
             if(random() < reboundChance) {
               p.hasBall = true; possession = p.team; shotClock = 24;
+
+              // リバウンド後：即座にPGへパス
+              if(p.position !== "PG") {
+                let pg = players.find(pl =>
+                  pl.team === p.team &&
+                  pl.position === "PG"
+                );
+                if(pg && dist(p.x, p.y, pg.x, pg.y) < 300) {
+                  setTimeout(() => {
+                    if(p.hasBall) {
+                      passTo(p, pg);
+                      pg.bringingBallUp = true;
+                      pg.inTransition = true;
+                      addFloatingText(pg.x, pg.y - 50, "OUTLET!", [0, 255, 200]);
+                    }
+                  }, 200); // 0.33秒後にアウトレットパス
+                }
+              } else {
+                // PG自身がリバウンド
+                p.bringingBallUp = true;
+                p.inTransition = true;
+              }
               addFloatingText(p.x, p.y - 40, "OFF REBOUND!", [255, 200, 100]);
             }
           }
@@ -1320,6 +1347,26 @@ function shoot(s, tx, ty, is3pt) {
 function attemptSteal(stealer, handler) {
   if(random(100) < stealer.stl - handler.handling * 0.3) {
     handler.hasBall = false; stealer.hasBall = true;
+
+    // スティール後：PGへパス
+    if(stealer.position !== "PG") {
+      let pg = players.find(pl =>
+        pl.team === stealer.team &&
+        pl.position === "PG"
+      );
+      if(pg && dist(stealer.x, stealer.y, pg.x, pg.y) < 250) {
+        setTimeout(() => {
+          if(stealer.hasBall) {
+            passTo(stealer, pg);
+            pg.bringingBallUp = true;
+            pg.inTransition = true;
+          }
+        }, 300);
+      }
+    } else {
+      stealer.bringingBallUp = true;
+      stealer.inTransition = true;
+    }
     possession = stealer.team; shotClock = 24;
 
     // 攻守切り替え：即座にディフェンスへ移行
@@ -1330,6 +1377,16 @@ function attemptSteal(stealer, handler) {
       }
     });
     addFloatingText(stealer.x, stealer.y - 40, "STEAL!", [0,255,100]);
+
+    // 攻守交代：古い状態をリセット
+    players.forEach(pl => {
+      if(pl.team !== stealer.team) {
+        pl.bringingBallUp = false;
+        pl.isPlaymaker = false;
+        pl.inTransition = false;
+        pl.playmakingTimer = 0;
+      }
+    });
   }
   stealer.lock = 40;
 }
