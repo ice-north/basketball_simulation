@@ -55,6 +55,7 @@ let finalGoal = {ringX:861.25,ringY:381.25,ringZ:110,ringSize:25,poleBaseX:895,p
 let players = [], ball, scorePlayer = 0, scoreDefender = 0, goalChecked = false;
 let gameTime = 720, quarter = 1, shotClock = 24, possession = null;
 let gameState = "playing", throwInState = null;
+let lastActionWasShot = false; // シュート後のリバウンドを区別
 let particles = [], floatingTexts = [];
 const NET_DAMPING = 0.85, BALL_GRAVITY = 0.4275, BOUNCE_FACTOR = 0.72, AIR_RESISTANCE = 0.9995; // ボール重力5%減
 let netRight = {offsetX:0,swing:0,phase:0}, netLeft = {offsetX:0,swing:0,phase:0};
@@ -1263,7 +1264,7 @@ function isPassSafe(passer, receiver) {
       let projY = passY1 + dotProduct * lineY;
       let distToLine = dist(d.x, d.y, projX, projY);
       // 危険な距離：インターセプト能力を考慮
-      let interceptThreshold = map(d.steal, 0, 100, 35, 55); // 危険ゾーン拡大
+      let interceptThreshold = map(d.steal, 0, 100, 20, 35); // インターセプト範囲縮小
       interceptThreshold *= map(d.speed, 0, 100, 0.8, 1.3);
       if(distToLine < interceptThreshold) {
         return false; // 危険なパス
@@ -1271,7 +1272,7 @@ function isPassSafe(passer, receiver) {
     }
   }
   // レシーバーに近いディフェンダーもチェック
-  let nearReceiverDef = defenders.filter(d => dist(d.x, d.y, receiver.x, receiver.y) < 50); // レシーバー付近のディフェンス判定拡大
+  let nearReceiverDef = defenders.filter(d => dist(d.x, d.y, receiver.x, receiver.y) < 35); // レシーバー判定縮小
   if(nearReceiverDef.length >= 2) return false; // ダブルチームへのパス禁止
   if(nearReceiverDef.length >= 1 && passDist > 200) return false; // 遠距離パスで敵が近い場合禁止
 
@@ -1300,7 +1301,7 @@ function passTo(passer, receiver) {
 }
 
 function shoot(s, tx, ty, is3pt) {
-  s.hasBall = false; s.mustShoot = false; goalChecked = false; s.lock = 60;
+  s.hasBall = false; s.mustShoot = false; goalChecked = false; s.lock = 60; lastActionWasShot = true;
   let d = dist(s.x, s.y, tx, ty);
   let acc = is3pt ? s.tpt : s.sht;
 
@@ -1346,7 +1347,7 @@ function shoot(s, tx, ty, is3pt) {
 
 function attemptSteal(stealer, handler) {
   if(random(100) < stealer.stl - handler.handling * 0.3) {
-    handler.hasBall = false; stealer.hasBall = true;
+    handler.hasBall = false; stealer.hasBall = true; lastActionWasShot = false;
 
     // スティール後：PGへパス
     if(stealer.position !== "PG") {
@@ -1376,7 +1377,7 @@ function attemptSteal(stealer, handler) {
         pl.transitionTimer = 120; // 2秒間トランジションモード
       }
     });
-    addFloatingText(stealer.x, stealer.y - 40, "STEAL!", [0,255,100]);
+    addFloatingText(stealer.x, stealer.y - 40, "STEAL!", [255, 100, 255]);
 
     // 攻守交代：古い状態をリセット
     players.forEach(pl => {
@@ -1853,7 +1854,7 @@ function updatePhysics() {
     if(ball.passTarget !== null) {
       let rcv = players[ball.passTarget];
       if(rcv && dist(rcv.x, rcv.y, ball.x, ball.y) < 35 && ball.z < 60) {
-        rcv.hasBall = true;
+        rcv.hasBall = true; lastActionWasShot = false;
         rcv.lock = 25; // キャッチ後すぐにパスしないようロック
         ball.passTarget = null;
       }
@@ -1889,10 +1890,10 @@ function checkGoal(side, net) {
   if(ball.vz < 0 && ball.z < finalGoal.ringZ && ball.z > finalGoal.ringZ - 30 && d < finalGoal.ringSize * 0.65) {
     net.offsetX = ball.vx * 2.0; net.swing = 15; net.phase = 0; // ネットの揺れ増加
     // ネットによるボール減速（よりリアルに）
-    ball.vx *= 0.35;
-    ball.vy *= 0.35;
+    ball.vx *= 0.65; // ネット通過：軽減（爽快感）
+    ball.vy *= 0.65;
     // 網による減速
-    ball.vz *= 0.25; // ネットで大幅減速（リアルな落下）
+    ball.vz *= 0.55; // ネットで減速するが爽快に抜ける
     if(!goalChecked && ball.z < finalGoal.ringZ - 5) {
       let pts = ball.is3pt ? 3 : 2;
       if(side === 1) {
@@ -1902,7 +1903,7 @@ function checkGoal(side, net) {
         scoreDefender += pts;
         quarterScoresDefender[quarter - 1] += pts;
       }
-      goalChecked = true;
+      goalChecked = true; lastActionWasShot = false;
       for(let i=0;i<30;i++) particles.push({x:rx,y:finalGoal.ringY,vx:random(-5,5),vy:random(-5,5),life:60,color:side===1?[0,150,255]:[255,50,50]});
       addFloatingText(rx, finalGoal.ringY - 50, ball.is3pt ? "+3!" : "+2!", side===1?[0,200,255]:[255,100,100]);
       let newTeam = side === 1 ? "DefenderTeam" : "PlayerTeam";
@@ -1911,13 +1912,18 @@ function checkGoal(side, net) {
       // ゴール後：新しい守備側は素早く自陣に戻る
       players.forEach(p => {
         if(p.team === newTeam) {
-          p.returningToDefense = true;
+          // 得点後：守備に転じるチームを自陣に戻す
+          p.transitionDefense = true;
+          p.transitionTimer = 90; // 1.5秒間
+          p.bringingBallUp = false;
+          p.isPlaymaker = false;
+          p.inTransition = false;
         }
       });
 
       setTimeout(() => {
         startThrowIn(newTeam, thX, 406.25, "INBOUND");
-        players.forEach(p => p.returningToDefense = false);
+        // トランジションディフェンスは自動的にタイマーで終了
       }, 1000);
     }
   }
