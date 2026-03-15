@@ -69,6 +69,8 @@ const positions = ["PG","SG","SF","PF","C"];
 const SPEED_WALK = 0.285, SPEED_JOG = 0.57, SPEED_RUN = 0.95, SPEED_SPRINT = 1.425; // 5%減速
 // ゲーム速度
 let gameSpeed = 1;
+let desiredPace = "normal";
+let paceMultiplier = 1.0;
 // 戦略システム
 let screens = []; // {screener: id, ballHandler: id, startTime: frameCount, completed: bool}
 let cuts = []; // {cutter: id, type: "backdoor"/"baseline", targetX, targetY, startTime}
@@ -153,6 +155,13 @@ function initPlayers() {
       isolationMode: false,       // アイソレーション中
       dribbleMoveType: null,      // "crossover", "hesitation", "behind"
       dribbleMoveTimer: 0,        // ドリブルムーブタイマー
+      // NBA Realism states
+      jumpShooting: false,
+      jumpShootPhase: 0,
+      jumpShootTarget: null,
+      constantMotion: false,
+      motionTimer: 0,
+      motionType: null,
       // PG専用状態
       bringingBallUp: false,      // ボール運び中
       ballAdvanceTarget: null,    // ボール運びの目標位置
@@ -899,6 +908,28 @@ function updatePlayerAI(p) {
           moveToward(p, constrain(idealX,50,950), constrain(idealY,260,550), speed*0.5);
         }
       } else {
+        // Constant off-ball motion
+        if(!p.motionTimer || p.motionTimer <= 0) {
+          p.motionTimer = 120;
+          let roll = random();
+          if(roll < 0.15 && !p.isCutting) {
+            p.motionType = "cut";
+            initiateCut(p, random() > 0.5 ? "backdoor" : "baseline");
+          } else if(roll < 0.35 && pos !== "C" && pos !== "PF") {
+            p.motionType = "spot";
+          } else {
+            p.motionType = null;
+          }
+        }
+        p.motionTimer--;
+
+        if(p.motionType === "spot") {
+          let spotX = tg.x + (tg.x > 500 ? -200 : 200);
+          let spotY = tg.y + (p.id % 2 === 0 ? -120 : 120);
+          moveToward(p, constrain(spotX, 50, 950), constrain(spotY, 260, 550), speed * 0.6);
+          return;
+        }
+
         // 理想的なオフェンスポジションへ移動（コート全体を使用）
         p.speedMultiplier = SPEED_JOG;
         let pos = p.position;
@@ -1301,6 +1332,14 @@ function passTo(passer, receiver) {
 }
 
 function shoot(s, tx, ty, is3pt) {
+  if(!s.jumpShooting) {
+    s.jumpShooting = true;
+    s.jumpShootPhase = 0;
+    s.jumpShootTarget = {x: tx, y: ty, is3pt: is3pt};
+    s.lock = 60;
+    return;
+  }
+  // Actual shot release
   s.hasBall = false; s.mustShoot = false; goalChecked = false; s.lock = 60; lastActionWasShot = true;
   let d = dist(s.x, s.y, tx, ty);
   let acc = is3pt ? s.tpt : s.sht;
