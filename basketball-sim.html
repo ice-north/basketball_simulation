@@ -55,6 +55,32 @@ let finalGoal = {ringX:861.25,ringY:381.25,ringZ:110,ringSize:25,poleBaseX:895,p
 let players = [], ball, scorePlayer = 0, scoreDefender = 0, goalChecked = false;
 let gameTime = 720, quarter = 1, shotClock = 24, possession = null;
 let gameState = "playing", throwInState = null;
+
+// ============================================
+// OPUS FIX: Validation Helper Functions
+// ============================================
+
+// Validate player ID is within bounds and alive
+function isValidPlayerId(id) {
+  return id !== null && id !== undefined &&
+         id >= 0 && id < players.length &&
+         players[id] !== null && players[id] !== undefined;
+}
+
+// Get player by ID safely
+function getPlayer(id) {
+  return isValidPlayerId(id) ? players[id] : null;
+}
+
+// Safe distance calculation with epsilon
+function safeDist(x1, y1, x2, y2) {
+  let dx = x2 - x1;
+  let dy = y2 - y1;
+  let d = Math.sqrt(dx * dx + dy * dy);
+  return Math.max(d, 0.001); // Prevent zero
+}
+
+// ============================================
 let lastActionWasShot = false; // シュート後のリバウンドを区別
 let particles = [], floatingTexts = [];
 const NET_DAMPING = 0.85, BALL_GRAVITY = 0.4275, BOUNCE_FACTOR = 0.72, AIR_RESISTANCE = 0.9995; // ボール重力5%減
@@ -315,6 +341,10 @@ function draw() {
   updateParticles(); updateFloatingTexts();
   drawScoreboard();
   if(throwInState) {
+  // OPUS FIX: Validate thrower exists
+  if(!isValidPlayerId(throwInState.thrower)) {
+    throwInState = null; // Invalid state
+  } else {
     fill(0,180); noStroke(); rect(width/2-120, height/2-25, 240, 50, 10);
     fill(255); textSize(14); textAlign(CENTER,CENTER);
     let teamName = throwInState.team === "PlayerTeam" ? "BLUE" : "RED";
@@ -323,7 +353,7 @@ function draw() {
     text(throwInState.reason, width/2, height/2+12);
     noFill(); stroke(255,255,0); strokeWeight(2);
     ellipse(throwInState.x, throwInState.y, 30 + sin(frameCount*0.1)*5, 15);
-  }
+  }}
 }
 
 function updateUI() {
@@ -508,6 +538,14 @@ function updatePlayerAI(p) {
 
   // スローイン時：スロワーは指定位置へ、パスを出す（5秒以内必須）
   if(throwInState && throwInState.thrower === p.id) {
+  // OPUS FIX: Timeout for stuck throw-ins
+  if(frameCount - throwInState.startTime > 600) { // 10 seconds
+    console.warn("Throw-in timeout - forcing completion");
+    throwInState = null;
+    p.hasBall = true;
+    ball.x = p.x; ball.y = p.y; ball.z = 45;
+    return;
+  }
     p.speedMultiplier = SPEED_JOG;
     p.hasBall = false; // スローイン中はドリブル禁止（バイオレーション防止）
     // フェーズ1: ボールを拾いに行く
@@ -1120,7 +1158,8 @@ function updatePlayerAI(p) {
       // ボックスアウト実行中（シュート後のリバウンド）
       // ボックスアウト実行中（シュート後のリバウンド）- パワー勝負
       if(p.isBoxingOut && p.boxOutTarget !== null) {
-        let boxTarget = players[p.boxOutTarget];
+        // OPUS FIX: Validate box out target
+        let boxTarget = getPlayer(p.boxOutTarget);
         if(boxTarget && ball.z > 30) {
           p.speedMultiplier = SPEED_WALK;
           // 相手とゴールの間に入る
@@ -1162,7 +1201,8 @@ function updatePlayerAI(p) {
 
       // ヘルプディフェンス判定
       if(checkHelpDefense(p) && p.helpTarget !== null) {
-        let helpPlayer = players[p.helpTarget];
+        // OPUS FIX: Validate help target
+        let helpPlayer = getPlayer(p.helpTarget);
         if(helpPlayer && helpPlayer.hasBall) {
           p.speedMultiplier = SPEED_SPRINT;
           // ボール保持者とゴールの間に入る
@@ -1434,7 +1474,7 @@ function isPassSafe(passer, receiver) {
     // ディフェンダーとパスラインの距離を計算
     let lineX = passX2 - passX1;
     let lineY = passY2 - passY1;
-    let dotProduct = ((d.x - passX1) * lineX + (d.y - passY1) * lineY) / (passDist * passDist);
+    let dotProduct = ((d.x - passX1) * lineX + (d.y - passY1) * lineY) / Math.max(passDist * passDist, 0.001);
     if(dotProduct > 0 && dotProduct < 1) { // ディフェンダーがパスライン上
       let projX = passX1 + dotProduct * lineX;
       let projY = passY1 + dotProduct * lineY;
@@ -1470,11 +1510,13 @@ function isPassSafe(passer, receiver) {
 
 function passTo(passer, receiver) {
   passer.hasBall = false; passer.lock = 20;
-  let d = dist(passer.x, passer.y, receiver.x, receiver.y);
+  let d = safeDist(passer.x, passer.y, receiver.x, receiver.y); // OPUS FIX
   let spd = map(passer.pas, 0, 100, 5, 9), t = d / spd;
   ball.vx = (receiver.x - ball.x) / t;
   ball.vy = (receiver.y - ball.y) / t;
   ball.vz = map(d, 50, 300, 1.5, 4) + (BALL_GRAVITY * t * 0.2);
+  // OPUS FIX: Validate pass target
+  if(!receiver || !isValidPlayerId(receiver.id)) return;
   ball.passTarget = receiver.id; ball.lastTouch = passer.team;
   for(let i=0;i<5;i++) particles.push({x:passer.x,y:passer.y-passer.z,vx:random(-1,1),vy:random(-2,0),life:20,color:[255,255,200]});
   // パス後の動き：Give & Go または スペーシング
@@ -1662,7 +1704,10 @@ function checkHelpDefense(defender) {
   // ボール保持者がゴールに近く、マークマンが離れている場合はヘルプ
   let tg = defender.team === "PlayerTeam" ? {x:finalGoal.ringX, y:finalGoal.ringY} : {x:1000-finalGoal.ringX, y:finalGoal.ringY};
   let distToGoal = dist(handler.x, handler.y, tg.x, tg.y);
-  let mark = players[defender.id % 5 + (defender.team === "PlayerTeam" ? 5 : 0)];
+  // OPUS FIX: Safe defensive marking
+  let targetId = defender.id % 5 + (defender.team === "PlayerTeam" ? 5 : 0);
+  let mark = getPlayer(targetId);
+  if(!mark) mark = players.find(p => p && p.team !== defender.team) || null;
 
   if(distToGoal < 120 && mark && dist(defender.x, defender.y, mark.x, mark.y) > 80) {
     defender.helpDefense = true;
@@ -1835,11 +1880,20 @@ function shotClockViolation() {
 function startThrowIn(team, x, y, reason) {
   let holder = players.find(p=>p.hasBall); if(holder) holder.hasBall = false;
   // C/PFがスローイン（PGが受け取る）
-  let thrower = players.find(p => p.team === team && (p.position === "C" || p.position === "PF"));
-  if(!thrower) thrower = players.find(p => p.team === team && p.position === "PG"); // フォールバック
-  throwInState = { team, x, y, reason, phase: "fetching", thrower: thrower ? thrower.id : (team==="PlayerTeam"?0:5) };
+  // OPUS FIX: Robust thrower selection
+  let thrower = players.find(p => p && p.team === team && (p.position === "C" || p.position === "PF"));
+  if(!thrower) thrower = players.find(p => p && p.team === team && p.position === "PG");
+  if(!thrower) thrower = players.find(p => p && p.team === team); // Any player
+  if(!thrower) {
+    // Emergency: no valid players found, cancel throw-in
+    console.error("No thrower found for team:", team);
+    throwInState = null;
+    return;
+  }
+  throwInState = { team, x, y, reason, phase: "fetching", startTime: frameCount, thrower: thrower ? thrower.id : (team==="PlayerTeam"?0:5) };
   throwInState.ballX = ball.x; throwInState.ballY = ball.y; // ボール位置を保存（回収用）
   ball.vx = 0; ball.vy = 0; ball.vz = 0;
+  ball.reboundClaimed = false; // OPUS FIX
 }
 
 function startJumpBall() {
@@ -1867,6 +1921,7 @@ function startJumpBall() {
 
   ball.x = 500; ball.y = 388.75; ball.z = 80;
   ball.vx = 0; ball.vy = 0; ball.vz = 0;
+  ball.reboundClaimed = false; // OPUS FIX
 
   // 全選手をセンターサークル周囲に配置
   let j1 = playerTeamJumper, j2 = defenderTeamJumper;
@@ -1889,6 +1944,10 @@ function startJumpBall() {
 
 function updateJumpBall() {
   if(!jumpBallState) return;
+  // OPUS FIX: Validate jumpers exist
+  if(!isValidPlayerId(jumpBallState.jumper1) || !isValidPlayerId(jumpBallState.jumper2)) {
+    jumpBallState = null; return;
+  }
   let j1 = players[jumpBallState.jumper1];
   let j2 = players[jumpBallState.jumper2];
   jumpBallState.timer++;
@@ -2057,7 +2116,8 @@ function updatePhysics() {
     // パスターゲットへのキャッチ判定
     // パスインターセプト判定（ターゲットより先にチェック）
     if(ball.passTarget !== null && ball.z < 60) {
-      let rcv = players[ball.passTarget];
+      // OPUS FIX: Safe pass target lookup
+      let rcv = getPlayer(ball.passTarget);
       if(rcv) {
         // パスルート上のディフェンダーを探す
         let defenders = players.filter(d =>
