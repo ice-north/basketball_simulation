@@ -263,35 +263,6 @@ function buildRosterUI() {
 function draw() {
   background(40,40,60);
 
-  // 詳細な床板レンダリング（50枚以上）
-  push();
-  let boardWidth = (987.5 - 12.5) / 52; // 52枚の板
-  for(let bx = 0; bx < 52; bx++) {
-    let x = 12.5 + bx * boardWidth;
-    // 交互に色を変える（木目のバリエーション）
-    let baseColor = bx % 2 === 0 ? [200, 145, 95] : [210, 155, 105];
-    // 微妙な明るさのランダム性
-    let brightness = 1 + (Math.sin(bx * 0.5) * 0.05);
-    noStroke();
-    fill(baseColor[0] * brightness, baseColor[1] * brightness, baseColor[2] * brightness);
-    rect(x, 250, boardWidth, 312.5);
-
-    // 板の境界線（微妙なライン）
-    stroke(180, 130, 85, 60);
-    strokeWeight(1);
-    line(x, 250, x, 562.5);
-  }
-
-  // 木目のテクスチャ（微妙な横線）
-  stroke(190, 140, 90, 20);
-  strokeWeight(0.5);
-  for(let ty = 250; ty < 562.5; ty += 8) {
-    let offset = Math.sin(ty * 0.1) * 3;
-    line(12.5 + offset, ty, 987.5 + offset, ty);
-  }
-  pop();
-
-
   // ジャンプボール中は時間を止める（速度倍率対応）
   if (frameCount % Math.floor(60 / gameSpeed) === 0 && gameState === "playing" && !throwInState && !jumpBallState) {
     gameTime--; shotClock--;
@@ -511,14 +482,16 @@ function updatePlayerAI(p) {
     p.speedMultiplier = SPEED_SPRINT;
     let pos = p.position;
     let idealX, idealY;
+    // PlayerTeam（青）は左ゴール（x=138付近）を守る
+    // DefenderTeam（赤）は右ゴール（x=861付近）を守る
     if(pos === "PG" || pos === "SG") {
-      idealX = p.team === "PlayerTeam" ? 750 : 250; // ゴール近く
+      idealX = p.team === "PlayerTeam" ? 250 : 750; // 守るゴール近く
       idealY = pos === "PG" ? 350 : 420;
     } else if(pos === "SF") {
-      idealX = p.team === "PlayerTeam" ? 250 : 750;
+      idealX = p.team === "PlayerTeam" ? 300 : 700;
       idealY = 388.75;
     } else {
-      idealX = p.team === "PlayerTeam" ? 200 : 800;
+      idealX = p.team === "PlayerTeam" ? 200 : 800; // ペイント付近
       idealY = pos === "PF" ? 340 : 430;
     }
     moveToward(p, idealX, idealY, p.spd * 0.045 * p.speedMultiplier);
@@ -1322,14 +1295,15 @@ function updatePlayerAI(p) {
       p.speedMultiplier = SPEED_JOG;
       let pos = p.position;
       let idealX, idealY;
+      // PlayerTeam（青）は左ゴールを守る、DefenderTeam（赤）は右ゴールを守る
       if(pos === "PG" || pos === "SG") {
-        idealX = p.team === "PlayerTeam" ? 300 : 700;
+        idealX = p.team === "PlayerTeam" ? 300 : 700; // 守るゴール付近
         idealY = pos === "PG" ? 350 : 420;
       } else if(pos === "SF") {
         idealX = p.team === "PlayerTeam" ? 250 : 750;
         idealY = 388.75;
       } else {
-        idealX = p.team === "PlayerTeam" ? 200 : 800;
+        idealX = p.team === "PlayerTeam" ? 200 : 800; // ペイント
         idealY = pos === "PF" ? 340 : 430;
       }
       moveToward(p, constrain(idealX,125,875), constrain(idealY,275,537.5), speed*0.4);
