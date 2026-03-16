@@ -483,6 +483,11 @@ function updatePlayerAI(p) {
       idealY = pos === "PF" ? 340 : 430;
     }
     moveToward(p, idealX, idealY, p.spd * 0.045 * p.speedMultiplier);
+
+    // 位置についたら完了
+    if(dist(p.x, p.y, idealX, idealY) < 20) {
+      p.returningToDefense = false;
+    }
     return;
   }
 
@@ -496,7 +501,7 @@ function updatePlayerAI(p) {
       if(!throwInState.timer) throwInState.timer = 0;
       throwInState.timer++;
       // 5秒ルール（300フレーム = 5秒）
-      if(throwInState.timer > 300) {
+      if(throwInState.timer > 900) {
         // 5秒バイオレーション：相手ボールに
         let newTeam = throwInState.team === "PlayerTeam" ? "DefenderTeam" : "PlayerTeam";
         addFloatingText(throwInState.x, throwInState.y - 40, "5-SEC VIOLATION!", [255, 100, 100]);
@@ -2028,10 +2033,10 @@ function checkGoal(side, net) {
   if(ball.vz < 0 && ball.z < finalGoal.ringZ && ball.z > finalGoal.ringZ - 30 && d < finalGoal.ringSize * 0.65) {
     net.offsetX = ball.vx * 2.0; net.swing = 15; net.phase = 0; // ネットの揺れ増加
     // ネットによるボール減速（よりリアルに）
-    ball.vx *= 0.65; // ネット通過：軽減（爽快感）
-    ball.vy *= 0.65;
+    ball.vx *= 0.75; // ネット通過：軽減（爽快感）
+    ball.vy *= 0.75;
     // 網による減速
-    ball.vz *= 0.55; // ネットで減速するが爽快に抜ける
+    ball.vz *= 0.85; // ネット通過：軽い減速のみ（爽快感）
     if(!goalChecked && ball.z < finalGoal.ringZ - 5) {
       let pts = ball.is3pt ? 3 : 2;
       if(side === 1) {
@@ -2053,6 +2058,19 @@ function checkGoal(side, net) {
           // 得点後：守備に転じるチームを自陣に戻す
           p.transitionDefense = true;
           p.transitionTimer = 90; // 1.5秒間
+          p.bringingBallUp = false;
+          p.isPlaymaker = false;
+          p.inTransition = false;
+        }
+      });
+
+
+      // 得点したチームも自陣へ戻る（両チームが位置につく）
+      players.forEach(p => {
+        if(p.team !== newTeam) {
+          // 得点したチーム：自陣のオフェンス位置へ
+          p.returningToDefense = true;
+          p.transitionTimer = 90; // 守備側と同じ時間
           p.bringingBallUp = false;
           p.isPlaymaker = false;
           p.inTransition = false;
