@@ -387,6 +387,53 @@ function drawPlayer(p) {
 
   // ボール保持者のグロー効果
   if(p.hasBall) {
+
+  // OPUS FIX: Pressure escape
+  let nearDefenders = players.filter(d => d.team !== p.team && dist(d.x, d.y, p.x, p.y) < 60);
+  let pressured = nearDefenders.length > 0 && nearDefenders[0] && dist(p.x, p.y, nearDefenders[0].x, nearDefenders[0].y) < 40;
+  
+  if(pressured && !p.pressureEscaping) {
+    let defender = nearDefenders[0];
+    let teammates = players.filter(t => t.team === p.team && t.id !== p.id && !t.hasBall);
+    
+    // Option 1: Find safe pass (preferred)
+    let safeTeammates = teammates.filter(t => {
+      let defDist = dist(t.x, t.y, defender.x, defender.y);
+      return defDist > 80 && isPassSafe(p, t);
+    });
+    
+    if(safeTeammates.length > 0 && random() < 0.7) {
+      // Emergency pass to open teammate
+      let target = safeTeammates.sort((a,b) => 
+        dist(b.x, b.y, defender.x, defender.y) - dist(a.x, a.y, defender.x, defender.y))[0];
+      passTo(p, target);
+      addFloatingText(p.x, p.y - 30, "ESCAPE PASS", [100, 255, 255]);
+      p.pressureEscaping = false;
+      return;
+    } else {
+      // Option 2: Dribble escape (no safe pass)
+      p.pressureEscaping = true;
+      p.escapeTimer = 30; // 0.5 seconds
+      
+      // Calculate escape direction (away from defender)
+      let escapeAngle = atan2(p.y - defender.y, p.x - defender.x);
+      let escapeX = p.x + cos(escapeAngle) * 100;
+      let escapeY = p.y + sin(escapeAngle) * 100;
+      p.escapeTarget = {x: constrain(escapeX, 50, 950), y: constrain(escapeY, 270, 540)};
+      addFloatingText(p.x, p.y - 30, "DRIBBLE ESCAPE", [255, 255, 100]);
+    }
+  }
+  
+  // Execute dribble escape
+  if(p.pressureEscaping && p.escapeTimer > 0) {
+    p.escapeTimer--;
+    p.speedMultiplier = SPEED_SPRINT; // Fast escape
+    moveToward(p, p.escapeTarget.x, p.escapeTarget.y, speed);
+    if(p.escapeTimer <= 0 || dist(p.x, p.y, p.escapeTarget.x, p.escapeTarget.y) < 20) {
+      p.pressureEscaping = false;
+    }
+    return;
+  }
     noStroke();
     fill(baseColor[0], baseColor[1], baseColor[2], 40);
     ellipse(px, py, p.size + 8, p.size + 8);
@@ -938,38 +985,38 @@ function updatePlayerAI(p) {
           p.speedMultiplier = SPEED_JOG;
         }
       } else if(pos === "SG") {
-        // SG: 3Pライン外（ウィング/コーナー）
+        // SG: 補助的役割（PGをサポート）
         let handlerDist = handler ? dist(handler.x, handler.y, tg.x, tg.y) : 999;
         if(handlerDist < 150) {
-          // コーナー3P
-          targetX = tg.x - side * 100;
-          targetY = tg.y + (p.id % 2 === 0 ? -150 : 150); // コーナー広く
+          // コーナー3P（サポート位置）
+          targetX = tg.x - side * 120; // 100 → 120
+          targetY = tg.y + (p.id % 2 === 0 ? -150 : 150);
         } else {
-          // ウィング3P
-          targetX = tg.x - side * 260;
-          targetY = tg.y + (p.id % 2 === 0 ? -135 : 135); // ウィング広く
+          // ウィング3P（PGサポート）
+          targetX = tg.x - side * 200; // 260 → 200（PGに近づく）
+          targetY = tg.y + (p.id % 2 === 0 ? -135 : 135);
         }
         p.speedMultiplier = SPEED_JOG;
       } else if(pos === "SF") {
-        // SF: ミッドレンジ〜ウィング（柔軟に動く）
+        // SF: 相手ゴール近くまで移動
         let cycle = (frameCount % 600) / 600;
         if(cycle > 0.5) {
-          targetX = tg.x - side * 220; // ウィング
-          targetY = tg.y + (p.id % 2 === 0 ? 125 : -125); // ウィング広く
+          targetX = tg.x - side * 180; // 220 → 180（ゴールに近い）
+          targetY = tg.y + (p.id % 2 === 0 ? 125 : -125);
         } else {
-          targetX = tg.x - side * 140; // ミッドレンジ
-          targetY = tg.y + (p.id % 2 === 0 ? -110 : 110); // ミッドレンジ広く
+          targetX = tg.x - side * 100; // 140 → 100（アタック位置）
+          targetY = tg.y + (p.id % 2 === 0 ? -110 : 110);
         }
         p.speedMultiplier = SPEED_JOG;
       } else if(pos === "PF") {
-        // PF: エルボー〜ハイポスト（ゴールに近い）
+        // PF: 相手ゴール近くまで移動
         let cycle = (frameCount % 480) / 480;
         let toElbow = cycle > 0.6;
         if(toElbow) {
           targetX = tg.x - side * 90; // エルボー
-          targetY = tg.y + (p.id % 2 === 0 ? -115 : 115); // エルボー広く
+          targetY = tg.y + (p.id % 2 === 0 ? -115 : 115);
         } else {
-          targetX = tg.x - side * 130; // ハイポスト
+          targetX = tg.x - side * 50; // 130 → 50（ゴールに近い）
           targetY = tg.y + (p.id % 2 === 0 ? -100 : 100);
         }
         p.speedMultiplier = SPEED_JOG;
@@ -1432,8 +1479,13 @@ function moveToward(p, tx, ty, targetSpeed) {
       p.x += cos(pushAngle) * pushForce;
       p.y += sin(pushAngle) * pushForce;
       // コート内に制限
-      p.x = constrain(p.x, 25, 975);
-      p.y = constrain(p.y, 262.5, 550);
+      // OPUS FIX: Allow out-of-bounds during fetch (same as movement)
+      let collMinX = 25, collMaxX = 975, collMinY = 262.5, collMaxY = 550;
+      if(throwInState && throwInState.thrower === p.id && throwInState.phase === "fetching") {
+        collMinX = 0; collMaxX = 1000; collMinY = 240; collMaxY = 575;
+      }
+      p.x = constrain(p.x, collMinX, collMaxX);
+      p.y = constrain(p.y, collMinY, collMaxY);
     }
   }
 
