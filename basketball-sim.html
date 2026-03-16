@@ -465,19 +465,44 @@ function drawScoreboard() {
   textFont('Arial');
   text("SHOT: " + shotClock, centerX + centerW/2, teamY + 58);
 
-  // Quarter scores (small display below shot clock)
-  textSize(10);
-  textFont('Arial');
-  fill(180, 180, 200);
-  let qScoreY = teamY + 68;
-  let qScoreText = "";
+  pop();
+
+  // Quarter scores (vertical layout below main scoreboard)
+  push();
+  let qX = width/2;
+  let qStartY = sbY + sbH + 10;
+  let qSpacing = 16;
+
+  textFont('sans-serif');
+  textSize(11);
+
   for(let i = 0; i < 4; i++) {
-    let qNum = i + 1;
+    let qY = qStartY + i * qSpacing;
+
+    // Current quarter highlight
+    let isCurrentQ = i === quarter - 1;
+
+    // BLUE score (left)
     let blueQ = quarterScoresPlayer[i] || 0;
+    let blueColor = isCurrentQ ? [0, 200, 255] : [100, 150, 180];
+    fill(blueColor[0], blueColor[1], blueColor[2]);
+    textAlign(RIGHT, CENTER);
+    text(blueQ, qX - 25, qY);
+
+    // Quarter number (center)
+    fill(isCurrentQ ? color(255, 215, 0) : color(120, 120, 130));
+    textAlign(CENTER, CENTER);
+    textSize(isCurrentQ ? 12 : 10);
+    text("Q" + (i + 1), qX, qY);
+
+    // RED score (right)
     let redQ = quarterScoresDefender[i] || 0;
-    qScoreText += "Q" + qNum + ":" + blueQ + "-" + redQ + "  ";
+    let redColor = isCurrentQ ? [255, 80, 80] : [180, 100, 100];
+    fill(redColor[0], redColor[1], redColor[2]);
+    textAlign(LEFT, CENTER);
+    textSize(11);
+    text(redQ, qX + 25, qY);
   }
-  text(qScoreText.trim(), centerX + centerW/2, qScoreY);
 
   pop();
 }
@@ -1132,11 +1157,15 @@ function updatePlayerAI(p) {
         // Use positioning stat to determine how well they get open
         let moveQuality = map(p.positioning, 0, 100, 0.5, 1.5);
 
-        getOpenAdjustX = cos(awayAngle) * 60 * moveQuality;
-        getOpenAdjustY = sin(awayAngle) * 60 * moveQuality;
+        // Limit adjustment to prevent going out of bounds (max 30 units)
+        let adjustAmount = min(30 * moveQuality, 45);
+        getOpenAdjustX = cos(awayAngle) * adjustAmount;
+        getOpenAdjustY = sin(awayAngle) * adjustAmount;
 
-        // Sprint to get open
-        p.speedMultiplier = SPEED_SPRINT;
+        // Sprint to get open (but will be reset by position logic if needed)
+        if(!p.isScreening && !p.isCutting) {
+          p.speedMultiplier = SPEED_SPRINT;
+        }
       }
 
       // OPUS FIX: Much wider spacing, PG/SG outside 3P line, C/PF close to goal, SF dynamic
@@ -1270,22 +1299,24 @@ function updatePlayerAI(p) {
           let defDist = dist(nearestDef.x, nearestDef.y, p.x, p.y);
           // If heavily marked, move to get open
           if(defDist < 45) {
-            // Use BBIQ (judgment) to find best escape direction
-            let smartMove = map(p.bbiq, 0, 100, 0.3, 1.0);
+            // Use decisions (judgment) to find best escape direction
+            let smartMove = map(p.decisions, 0, 100, 0.3, 1.0);
             let escapeAngle;
 
             if(smartMove > 0.7 && handler) {
-              // High BBIQ: Move toward ball handler's vision but away from defender
+              // High judgment: Move toward ball handler's vision but away from defender
               let toBallAngle = atan2(handler.y - p.y, handler.x - p.x);
               let fromDefAngle = atan2(p.y - nearestDef.y, p.x - nearestDef.x);
               escapeAngle = (toBallAngle + fromDefAngle) / 2; // Average angle
             } else {
-              // Low BBIQ: Just move away from defender
+              // Low judgment: Just move away from defender
               escapeAngle = atan2(p.y - nearestDef.y, p.x - nearestDef.x);
             }
 
-            targetX += cos(escapeAngle) * 60 * smartMove;
-            targetY += sin(escapeAngle) * 60 * smartMove;
+            // Limit movement to prevent going out of bounds
+            let adjustAmount = min(40 * smartMove, 50);
+            targetX += cos(escapeAngle) * adjustAmount;
+            targetY += sin(escapeAngle) * adjustAmount;
             p.speedMultiplier = SPEED_SPRINT; // Move quickly to get open
           }
         }
