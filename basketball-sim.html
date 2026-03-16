@@ -815,7 +815,7 @@ function updatePlayerAI(p) {
         if(pos === "SG" || pos === "SF") {
           // ウイング: 45度の位置
           targetX = tg.x + (p.team === "PlayerTeam" ? -150 : 150);
-          targetY = p.id % 2 === 0 ? tg.y - 100 : tg.y + 100;
+          targetY = p.id % 2 === 0 ? tg.y - 120 : tg.y + 120;
         } else if(pos === "PF" || pos === "C") {
           // ビッグマン: ペイントエリア付近
           targetX = tg.x + (p.team === "PlayerTeam" ? -80 : 80);
@@ -904,11 +904,11 @@ function updatePlayerAI(p) {
         if(handlerDist < 150) {
           // コーナー3P
           targetX = tg.x - side * 100;
-          targetY = tg.y + (p.id % 2 === 0 ? -140 : 140); // コーナー広く
+          targetY = tg.y + (p.id % 2 === 0 ? -150 : 150); // コーナー広く
         } else {
           // ウィング3P
           targetX = tg.x - side * 260;
-          targetY = tg.y + (p.id % 2 === 0 ? -120 : 120); // ウィング広く
+          targetY = tg.y + (p.id % 2 === 0 ? -135 : 135); // ウィング広く
         }
         p.speedMultiplier = SPEED_JOG;
       } else if(pos === "SF") {
@@ -916,10 +916,10 @@ function updatePlayerAI(p) {
         let cycle = (frameCount % 600) / 600;
         if(cycle > 0.5) {
           targetX = tg.x - side * 220; // ウィング
-          targetY = tg.y + (p.id % 2 === 0 ? 100 : -100);
+          targetY = tg.y + (p.id % 2 === 0 ? 125 : -125); // ウィング広く
         } else {
           targetX = tg.x - side * 140; // ミッドレンジ
-          targetY = tg.y + (p.id % 2 === 0 ? -90 : 90);
+          targetY = tg.y + (p.id % 2 === 0 ? -110 : 110); // ミッドレンジ広く
         }
         p.speedMultiplier = SPEED_JOG;
       } else if(pos === "PF") {
@@ -928,10 +928,10 @@ function updatePlayerAI(p) {
         let toElbow = cycle > 0.6;
         if(toElbow) {
           targetX = tg.x - side * 90; // エルボー
-          targetY = tg.y + (p.id % 2 === 0 ? -100 : 100); // エルボー広く
+          targetY = tg.y + (p.id % 2 === 0 ? -115 : 115); // エルボー広く
         } else {
           targetX = tg.x - side * 130; // ハイポスト
-          targetY = tg.y + (p.id % 2 === 0 ? -85 : 85);
+          targetY = tg.y + (p.id % 2 === 0 ? -100 : 100);
         }
         p.speedMultiplier = SPEED_JOG;
       } else { // C
@@ -940,7 +940,7 @@ function updatePlayerAI(p) {
         if(cycle < 0.7) {
           // ローポスト（ペイント内）
           targetX = tg.x - side * 55;
-          targetY = tg.y + (p.id % 2 === 0 ? 75 : -75); // ローポスト広く
+          targetY = tg.y + (p.id % 2 === 0 ? 85 : -85); // ローポスト広く
         } else {
           // ハイポスト
           targetX = tg.x - side * 100;
@@ -1838,6 +1838,7 @@ function startThrowIn(team, x, y, reason) {
   let thrower = players.find(p => p.team === team && (p.position === "C" || p.position === "PF"));
   if(!thrower) thrower = players.find(p => p.team === team && p.position === "PG"); // フォールバック
   throwInState = { team, x, y, reason, phase: "fetching", thrower: thrower ? thrower.id : (team==="PlayerTeam"?0:5) };
+  throwInState.ballX = ball.x; throwInState.ballY = ball.y; // ボール位置を保存（回収用）
   ball.vx = 0; ball.vy = 0; ball.vz = 0;
 }
 
@@ -2141,15 +2142,7 @@ function updatePhysics() {
     let oob = false, thX = ball.x, thY = ball.y;
     let oobType = null; // 'sideline' or 'baseline'
 
-    // サイドライン（上下）
-    if(ball.y < 250 || ball.y > 562.5) {
-      oob = true;
-      oobType = 'sideline';
-      thY = ball.y < 250 ? 240 : 570; // コートの外から
-      thX = constrain(ball.x, 62.5, 937.5); // 出た場所から
-    }
-
-    // ベースライン（左右＝ゴール裏）
+    // ベースライン（左右＝ゴール裏）- 優先判定
     if(ball.x < 12.5 || ball.x > 987.5) {
       oob = true;
       oobType = 'baseline';
@@ -2165,6 +2158,13 @@ function updatePhysics() {
         thX = 981.25;
         thY = 388.75;
       }
+    }
+    // サイドライン（上下）- ベースラインでない場合のみ
+    else if(ball.y < 250 || ball.y > 562.5) {
+      oob = true;
+      oobType = 'sideline';
+      thY = ball.y < 250 ? 240 : 570; // コートの外から
+      thX = constrain(ball.x, 62.5, 937.5); // 出た場所から
     }
 
     if(oob && ball.z < 30) {
