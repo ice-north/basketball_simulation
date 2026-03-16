@@ -462,7 +462,7 @@ function updatePlayerPhysics(p) {
     }
     if(p.z <= 0) { p.z = 0; p.vz = 0; p.isJumping = false; p.mustShoot = false; }
   }
-  if(p.hasBall && !p.isJumping) p.dribblePhase += 0.3;
+  if(p.hasBall && !p.isJumping) p.dribblePhase += 0.2; // ドリブル速度（遅く）
 
   // スタミナの増減: 移動距離と時間ベース
   let moveDist = dist(p.x, p.y, p.prevX, p.prevY);
@@ -516,7 +516,7 @@ function updatePlayerAI(p) {
       if(!throwInState.timer) throwInState.timer = 0;
       throwInState.timer++;
       // 5秒ルール（300フレーム = 5秒）
-      if(throwInState.timer > 900) {
+      if(throwInState.timer > 300) {
         // 5秒バイオレーション：相手ボールに
         let newTeam = throwInState.team === "PlayerTeam" ? "DefenderTeam" : "PlayerTeam";
         addFloatingText(throwInState.x, throwInState.y - 40, "5-SEC VIOLATION!", [255, 100, 100]);
@@ -545,6 +545,20 @@ function updatePlayerAI(p) {
           ball.passTarget = target.id;
           ball.lastTouch = p.team;
           throwInState = null; // スローイン完了
+          return;
+        }
+      } else if(throwInState.timer > 180) {
+        // 3秒経過：強制的にスローイン（安全性無視）
+        if(target && dist(p.x, p.y, target.x, target.y) < 300) {
+          let d = dist(p.x, p.y, target.x, target.y);
+          let spd = 7, t = d / spd;
+          ball.x = p.x; ball.y = p.y; ball.z = 45;
+          ball.vx = (target.x - ball.x) / t;
+          ball.vy = (target.y - ball.y) / t;
+          ball.vz = 2.5;
+          ball.passTarget = target.id;
+          ball.lastTouch = p.team;
+          throwInState = null;
           return;
         }
       }
@@ -594,7 +608,7 @@ function updatePlayerAI(p) {
   }
   let tg = p.team === "PlayerTeam" ? {x:finalGoal.ringX,y:finalGoal.ringY} : {x:1000-finalGoal.ringX,y:finalGoal.ringY};
   let og = p.team === "PlayerTeam" ? {x:1000-finalGoal.ringX,y:finalGoal.ringY} : {x:finalGoal.ringX,y:finalGoal.ringY};
-  let baseSpeed = p.spd * 0.0405 * (p.stamina/p.maxStamina * 0.4 + 0.6);
+  let baseSpeed = p.spd * 0.03645 * (p.stamina/p.maxStamina * 0.4 + 0.6);
   let speed = baseSpeed * p.speedMultiplier;
 
   if(p.hasBall && p.lock <= 0) {
