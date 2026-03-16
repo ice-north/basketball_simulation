@@ -533,9 +533,9 @@ function updatePlayerAI(p) {
       let target = openTeammates.length > 0 ? 
         openTeammates.sort((a,b) => dist(p.x,p.y,a.x,a.y) - dist(p.x,p.y,b.x,b.y))[0] :
         teammates.sort((a,b) => dist(p.x,p.y,a.x,a.y) - dist(p.x,p.y,b.x,b.y))[0];
-      if(target && dist(p.x, p.y, target.x, target.y) < 250 && throwInState.timer > 90) {
-        if(isPassSafe(p, target)) {
-          // スローイン専用のパス処理
+      // 3秒以上経過：強制的にスローイン（安全性無視）
+      if(throwInState.timer > 180) {
+        if(target && dist(p.x, p.y, target.x, target.y) < 350) {
           let d = dist(p.x, p.y, target.x, target.y);
           let spd = 7, t = d / spd;
           ball.x = p.x; ball.y = p.y; ball.z = 45;
@@ -544,12 +544,14 @@ function updatePlayerAI(p) {
           ball.vz = 2.5;
           ball.passTarget = target.id;
           ball.lastTouch = p.team;
-          throwInState = null; // スローイン完了
+          throwInState = null;
+          addFloatingText(p.x, p.y - 40, "THROW-IN", [100, 255, 100]);
           return;
         }
-      } else if(throwInState.timer > 180) {
-        // 3秒経過：強制的にスローイン（安全性無視）
-        if(target && dist(p.x, p.y, target.x, target.y) < 300) {
+      }
+      // 1.5秒以降：安全なパスを試みる
+      if(target && dist(p.x, p.y, target.x, target.y) < 250 && throwInState.timer > 90) {
+        if(isPassSafe(p, target)) {
           let d = dist(p.x, p.y, target.x, target.y);
           let spd = 7, t = d / spd;
           ball.x = p.x; ball.y = p.y; ball.z = 45;
