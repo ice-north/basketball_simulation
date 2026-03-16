@@ -1062,7 +1062,7 @@ function updatePlayerAI(p) {
           moveToward(p, helpX, helpY, speed);
 
           // ヘルプ後のスティール試行
-          if(dist(p.x, p.y, helpPlayer.x, helpPlayer.y) < 30 && random(100) < p.stl * 0.04 && p.lock <= 0) {
+          if(dist(p.x, p.y, helpPlayer.x, helpPlayer.y) < 30 && random(100) < p.stl * 0.02 && p.lock <= 0) {
             attemptSteal(p, helpPlayer);
           }
           return;
@@ -1145,7 +1145,7 @@ function updatePlayerAI(p) {
         }
 
         moveToward(p, defX, defY, speed*0.75);
-        if(mark.hasBall && dist(p.x,p.y,mark.x,mark.y) < 30 && random(100) < p.stl * 0.06 && p.lock <= 0) attemptSteal(p, mark);
+        if(mark.hasBall && dist(p.x,p.y,mark.x,mark.y) < 30 && random(100) < p.stl * 0.03 && p.lock <= 0) attemptSteal(p, mark);
       }
     } else if(p.transitionDefense && p.transitionTimer > 0) {
       // トランジションディフェンス：素早く自陣へ戻る
@@ -1420,7 +1420,7 @@ function shoot(s, tx, ty, is3pt) {
 }
 
 function attemptSteal(stealer, handler) {
-  if(random(100) < stealer.stl - handler.handling * 0.3) {
+  if(random(100) < (stealer.stl * 0.4) - (handler.handling * 0.5)) {
     handler.hasBall = false; stealer.hasBall = true; lastActionWasShot = false;
 
     // スティール後：PGへパス
@@ -1925,12 +1925,76 @@ function updatePhysics() {
     ball.z += ball.vz * 0.5;
 
     // パスターゲットへのキャッチ判定
+    // パスインターセプト判定（ターゲットより先にチェック）
+    if(ball.passTarget !== null && ball.z < 60) {
+      let rcv = players[ball.passTarget];
+      if(rcv) {
+        // パスルート上のディフェンダーを探す
+        let defenders = players.filter(d =>
+          d.team !== rcv.team &&
+          dist(d.x, d.y, ball.x, ball.y) < 25 && // ボールの近く
+          d.lock <= 0 // アクション可能
+        );
+
+        // インターセプト試行
+        for(let defender of defenders) {
+          // インターセプト確率（低め）
+          let interceptChance = map(defender.stl, 0, 100, 0.005, 0.025); // 0.5-2.5%
+          interceptChance *= map(defender.height, 160, 230, 0.9, 1.1);
+
+          if(random() < interceptChance) {
+            // パスカット成功！
+            defender.hasBall = true;
+            possession = defender.team;
+            shotClock = 24;
+            ball.passTarget = null;
+            ball.reboundClaimed = true; // Prevent loose ball scramble
+            defender.lock = 30;
+
+            addFloatingText(defender.x, defender.y - 40, "INTERCEPTED!", [255, 150, 0]);
+
+            // 速攻開始
+            if(defender.position === "PG" || defender.position === "SG") {
+              defender.bringingBallUp = true;
+              defender.inTransition = true;
+            } else {
+              // PGへアウトレットパス
+              let pg = players.find(p => p.team === defender.team && p.position === "PG");
+              if(pg) {
+                setTimeout(() => {
+                  if(defender.hasBall) {
+                    passTo(defender, pg);
+                    pg.bringingBallUp = true;
+                    pg.inTransition = true;
+                  }
+                }, 150);
+              }
+            }
+
+            // 相手チームをディフェンスモードに
+            players.forEach(pl => {
+              if(pl.team !== defender.team) {
+                pl.transitionDefense = true;
+                pl.transitionTimer = 120;
+              }
+            });
+
+            break; // インターセプト成功したらループ終了
+          }
+        }
+      }
+    }
+
     if(ball.passTarget !== null) {
       let rcv = players[ball.passTarget];
       if(rcv && dist(rcv.x, rcv.y, ball.x, ball.y) < 35 && ball.z < 60) {
         rcv.hasBall = true; lastActionWasShot = false;
         rcv.lock = 25; // キャッチ後すぐにパスしないようロック
         ball.passTarget = null;
+      } else if(ball.z <= 10 && ball.passTarget !== null) {
+        // パス失敗：ターゲットが取れなかった
+        ball.passTarget = null;
+        // ルーズボール状態だがreboundClaimedは既に制御されている
       }
     }
 
