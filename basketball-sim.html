@@ -552,6 +552,7 @@ function updatePlayerAI(p) {
     if(throwInState.phase === "fetching") {
       moveToward(p, throwInState.ballX, throwInState.ballY, p.spd * 0.08);
       // ボールを選手と一緒に移動
+      // Ball follows player (even out of bounds)
       ball.x = p.x; ball.y = p.y; ball.z = 45;
       // ボールに到達したらフェーズ2へ
       if(dist(p.x, p.y, throwInState.ballX, throwInState.ballY) < 30) {
@@ -977,11 +978,11 @@ function updatePlayerAI(p) {
         let cycle = (frameCount % 300) / 300;
         if(cycle < 0.7) {
           // ローポスト（ペイント内）
-          targetX = tg.x - side * 55;
+          targetX = tg.x - side * 30;
           targetY = tg.y + (p.id % 2 === 0 ? 85 : -85); // ローポスト広く
         } else {
           // ハイポスト
-          targetX = tg.x - side * 100;
+          targetX = tg.x - side * 70;
           targetY = tg.y;
         }
         p.speedMultiplier = SPEED_JOG;
@@ -1131,7 +1132,7 @@ function updatePlayerAI(p) {
           idealX = p.team === "PlayerTeam" ? 750 : 250;
           idealY = p.id % 2 === 0 ? 340 : 440;
         } else { // C
-          idealX = p.team === "PlayerTeam" ? 800 : 200;
+          idealX = p.team === "PlayerTeam" ? 850 : 150;
           idealY = p.id % 2 === 0 ? 350 : 430;
         }
 
@@ -1457,8 +1458,15 @@ function moveToward(p, tx, ty, targetSpeed) {
   let dampingFactor = distToTarget < 20 ? map(distToTarget, 0, 20, 0.3, 1.0) : 1.0;
   let actualSpeed = p.currentSpeed * dampingFactor;
 
-  p.x = constrain(p.x + cos(a)*actualSpeed, 25, 975);
-  p.y = constrain(p.y + sin(a)*actualSpeed, 262.5, 550);
+  // OPUS FIX: Allow out-of-bounds during ball fetch
+  let minX = 25, maxX = 975, minY = 262.5, maxY = 550;
+  if(throwInState && throwInState.thrower === p.id && throwInState.phase === "fetching") {
+    // Expand bounds to reach out-of-bounds ball
+    minX = 0; maxX = 1000;
+    minY = 240; maxY = 575;
+  }
+  p.x = constrain(p.x + cos(a)*actualSpeed, minX, maxX);
+  p.y = constrain(p.y + sin(a)*actualSpeed, minY, maxY);
 }
 
 function isPassSafe(passer, receiver) {
