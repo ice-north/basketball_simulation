@@ -1572,9 +1572,9 @@ function moveToward(p, tx, ty, targetSpeed) {
       p.x += cos(pushAngle) * pushForce;
       p.y += sin(pushAngle) * pushForce;
       // コート内に制限
-      // OPUS FIX: Allow out-of-bounds during fetch (same as movement)
+      // OPUS FIX: Allow out-of-bounds during ALL throw-in phases
       let collMinX = 25, collMaxX = 975, collMinY = 262.5, collMaxY = 550;
-      if(throwInState && throwInState.thrower === p.id && throwInState.phase === "fetching") {
+      if(throwInState && throwInState.thrower === p.id) {
         collMinX = 0; collMaxX = 1000; collMinY = 240; collMaxY = 575;
       }
       p.x = constrain(p.x, collMinX, collMaxX);
@@ -1603,10 +1603,10 @@ function moveToward(p, tx, ty, targetSpeed) {
   let dampingFactor = distToTarget < 20 ? map(distToTarget, 0, 20, 0.3, 1.0) : 1.0;
   let actualSpeed = p.currentSpeed * dampingFactor;
 
-  // OPUS FIX: Allow out-of-bounds during ball fetch
+  // OPUS FIX: Allow out-of-bounds during ALL throw-in phases
   let minX = 25, maxX = 975, minY = 262.5, maxY = 550;
-  if(throwInState && throwInState.thrower === p.id && throwInState.phase === "fetching") {
-    // Expand bounds to reach out-of-bounds ball
+  if(throwInState && throwInState.thrower === p.id) {
+    // Expand bounds to reach out-of-bounds ball and move to throw-in position
     minX = 0; maxX = 1000;
     minY = 240; maxY = 575;
   }
@@ -1670,7 +1670,7 @@ function passTo(passer, receiver) {
   ball.vz = map(d, 50, 300, 1.5, 4) + (BALL_GRAVITY * t * 0.2);
   // OPUS FIX: Validate pass target
   if(!receiver || !isValidPlayerId(receiver.id)) return;
-  ball.passTarget = receiver.id; ball.lastTouch = passer.team;
+  ball.passTarget = receiver.id; ball.passer = passer.id; ball.lastTouch = passer.team;
   for(let i=0;i<5;i++) particles.push({x:passer.x,y:passer.y-passer.z,vx:random(-1,1),vy:random(-2,0),life:20,color:[255,255,200]});
   // パス後の動き：Give & Go または スペーシング
   if(random() < 0.35 && passer.position !== "C") { // Cは動きが遅いのでカットしない
@@ -1739,7 +1739,9 @@ function shoot(s, tx, ty, is3pt) {
 }
 
 function attemptSteal(stealer, handler) {
-  if(random(100) < (stealer.stl * 0.4) - (handler.handling * 0.5)) {
+  // OPUS FIX: Handling skill heavily protects against steals
+  let stealChance = (stealer.stl * 0.25) - (handler.handling * 0.8);
+  if(random(100) < stealChance) {
     handler.hasBall = false; stealer.hasBall = true; lastActionWasShot = false;
 
     // スティール後：PGへパス
@@ -2072,7 +2074,8 @@ function startJumpBall() {
     tipTarget: null
   };
 
-  ball.x = 500; ball.y = 388.75; ball.z = 80;
+  // OPUS FIX: Lower initial ball height for reachability
+  ball.x = 500; ball.y = 388.75; ball.z = 60;
   ball.vx = 0; ball.vy = 0; ball.vz = 0;
   ball.reboundClaimed = false; // OPUS FIX
 
@@ -2108,19 +2111,19 @@ function updateJumpBall() {
 
   if(jumpBallState.phase === 0) {
     // 準備フェーズ：審判がボールを持っている演出（60フレーム=1秒）
-    ball.x = 500; ball.y = 388.75; ball.z = 80;
+    ball.x = 500; ball.y = 388.75; ball.z = 60;
     if(t > 60) { jumpBallState.phase = 1; jumpBallState.timer = 0; }
   }
   else if(jumpBallState.phase === 1) {
-    // ボール上昇：審判がトスアップ
-    ball.z = 80 + t * 3;
-    if(ball.z >= 180) { jumpBallState.phase = 2; jumpBallState.timer = 0; }
+    // ボール上昇：審判がトスアップ (OPUS FIX: Lower peak height)
+    ball.z = 60 + t * 3;
+    if(ball.z >= 120) { jumpBallState.phase = 2; jumpBallState.timer = 0; }
   }
   else if(jumpBallState.phase === 2) {
-    // 両選手がジャンプ
-    ball.z = 180;
-    let jumpHeight1 = map(j1.jmp, 0, 100, 25, 55);
-    let jumpHeight2 = map(j2.jmp, 0, 100, 25, 55);
+    // 両選手がジャンプ (OPUS FIX: Increase jump height for reachability)
+    ball.z = 120;
+    let jumpHeight1 = map(j1.jmp, 0, 100, 50, 90);
+    let jumpHeight2 = map(j2.jmp, 0, 100, 50, 90);
 
     j1.z = min(t * 3.5, jumpHeight1);
     j2.z = min(t * 3.5, jumpHeight2);
@@ -2281,9 +2284,15 @@ function updatePhysics() {
 
         // インターセプト試行
         for(let defender of defenders) {
+          // OPUS FIX: Passer's handling skill protects against interception
+          let passer = getPlayer(ball.passer);
+          let passerHandling = passer ? passer.handling : 50; // Default 50 if passer not found
+
           // インターセプト確率（低め）
           let interceptChance = map(defender.stl, 0, 100, 0.005, 0.025); // 0.5-2.5%
           interceptChance *= map(defender.height, 160, 230, 0.9, 1.1);
+          // High handling skill reduces interception chance significantly
+          interceptChance *= map(passerHandling, 0, 100, 1.5, 0.3);
 
           if(random() < interceptChance) {
             // パスカット成功！
