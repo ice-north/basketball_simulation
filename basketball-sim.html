@@ -510,8 +510,31 @@ function updatePlayerAI(p) {
   if(throwInState && throwInState.thrower === p.id) {
     p.speedMultiplier = SPEED_JOG;
     p.hasBall = false; // スローイン中はドリブル禁止（バイオレーション防止）
-    moveToward(p, throwInState.x, throwInState.y, p.spd * 0.06);
-    if(dist(p.x, p.y, throwInState.x, throwInState.y) < 20) {
+    // フェーズ1: ボールを拾いに行く
+    if(throwInState.phase === "fetching") {
+      moveToward(p, throwInState.ballX, throwInState.ballY, p.spd * 0.08);
+      // ボールを選手と一緒に移動
+      ball.x = p.x; ball.y = p.y; ball.z = 45;
+      // ボールに到達したらフェーズ2へ
+      if(dist(p.x, p.y, throwInState.ballX, throwInState.ballY) < 30) {
+        throwInState.phase = "positioning";
+        addFloatingText(p.x, p.y - 40, "BALL FETCHED", [100, 255, 100]);
+      }
+      return;
+    }
+    // フェーズ2: スローイン位置へ移動
+    if(throwInState.phase === "positioning") {
+      moveToward(p, throwInState.x, throwInState.y, p.spd * 0.06);
+      // ボールを選手と一緒に移動
+      ball.x = p.x; ball.y = p.y; ball.z = 45;
+      // スローイン位置に到達したらフェーズ3へ
+      if(dist(p.x, p.y, throwInState.x, throwInState.y) < 20) {
+        throwInState.phase = "ready";
+      }
+      return;
+    }
+    // フェーズ3: スローイン実行
+    if(throwInState.phase === "ready") {
       // タイマー初期化
       if(!throwInState.timer) throwInState.timer = 0;
       throwInState.timer++;
@@ -1804,6 +1827,7 @@ function shotClockViolation() {
   let thrower = players.find(p => p.team === newTeam && (p.position === "C" || p.position === "PF"));
   if(!thrower) thrower = players.find(p => p.team === newTeam && p.position === "PG");
   throwInState = { team: newTeam, x: thX, y: 406.25, reason: "SHOT CLOCK VIOLATION", thrower: thrower ? thrower.id : (newTeam==="PlayerTeam"?0:5) };
+  throwInState.ballX = ball.x; throwInState.ballY = ball.y;
   ball.vx = 0; ball.vy = 0; ball.vz = 0;
   addFloatingText(500, 350, "24 SEC VIOLATION", [255,100,100]);
 }
@@ -1813,7 +1837,7 @@ function startThrowIn(team, x, y, reason) {
   // C/PFがスローイン（PGが受け取る）
   let thrower = players.find(p => p.team === team && (p.position === "C" || p.position === "PF"));
   if(!thrower) thrower = players.find(p => p.team === team && p.position === "PG"); // フォールバック
-  throwInState = { team, x, y, reason, thrower: thrower ? thrower.id : (team==="PlayerTeam"?0:5) };
+  throwInState = { team, x, y, reason, phase: "fetching", thrower: thrower ? thrower.id : (team==="PlayerTeam"?0:5) };
   ball.vx = 0; ball.vy = 0; ball.vz = 0;
 }
 
