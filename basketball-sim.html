@@ -2082,7 +2082,7 @@ function updatePhysics() {
     if(ball.y < 250 || ball.y > 562.5) {
       oob = true;
       oobType = 'sideline';
-      thY = ball.y < 250 ? 256.25 : 556.25;
+      thY = ball.y < 250 ? 240 : 570; // コートの外から
       thX = constrain(ball.x, 62.5, 937.5); // 出た場所から
     }
 
@@ -2138,7 +2138,7 @@ function checkGoal(side, net) {
       for(let i=0;i<50;i++) particles.push({x:rx,y:finalGoal.ringY,vx:random(-5,5),vy:random(-5,5),life:60,color:side===1?[0,150,255]:[255,50,50]});
       addFloatingText(rx, finalGoal.ringY - 50, ball.is3pt ? "+3!" : "+2!", side===1?[0,200,255]:[255,100,100]);
       let newTeam = side === 1 ? "DefenderTeam" : "PlayerTeam";
-      let thX = side === 1 ? 25 : 975; // 逆側のベースラインから
+      let thX = side === 1 ? 975 : 25; // 得点したゴールの側のベースラインから
 
       // ゴール後：新しい守備側は素早く自陣に戻る
       players.forEach(p => {
