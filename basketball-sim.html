@@ -578,6 +578,24 @@ function drawBallTrail() {
 function updatePlayerPhysics(p) {
   if(p.isJumping) {
     p.vz -= BALL_GRAVITY * 0.5; p.z += p.vz;
+
+    // Lock horizontal position during jump to prevent mid-air direction changes
+    if(!p.jumpStartX) {
+      p.jumpStartX = p.x;
+      p.jumpStartY = p.y;
+    }
+    // Prevent horizontal movement during jump
+    if(p.hasBall) {
+      // Allow minimal forward drift for shooting motion
+      let maxDrift = 5;
+      p.x = constrain(p.x, p.jumpStartX - maxDrift, p.jumpStartX + maxDrift);
+      p.y = constrain(p.y, p.jumpStartY - maxDrift, p.jumpStartY + maxDrift);
+    } else {
+      // No movement for non-ball handlers
+      p.x = p.jumpStartX;
+      p.y = p.jumpStartY;
+    }
+
     if(p.hasBall && p.mustShoot && p.vz <= 0) {
       // シュート前にブロック判定
       let nearBlocker = players.find(d => d.team !== p.team && (d.position === "C" || d.position === "PF") && dist(d.x,d.y,p.x,p.y) < 40 && d.lock <= 0);
@@ -587,7 +605,12 @@ function updatePlayerPhysics(p) {
         shoot(p, tg.x, tg.y, dist(p.x,p.y,tg.x,tg.y) > 180);
       }
     }
-    if(p.z <= 0) { p.z = 0; p.vz = 0; p.isJumping = false; p.mustShoot = false; }
+    if(p.z <= 0) {
+      p.z = 0; p.vz = 0; p.isJumping = false; p.mustShoot = false;
+      // Clear jump position locks
+      p.jumpStartX = null;
+      p.jumpStartY = null;
+    }
   }
   if(p.hasBall && !p.isJumping) p.dribblePhase += 0.2; // ドリブル速度（遅く）
 
@@ -858,6 +881,9 @@ function updatePlayerAI(p) {
 
     // パス頻度（大幅低減：パス過多を防止）
     let passBaseRate = map(p.vision, 0, 100, 0.003, 0.012);
+    // Better decisions = better pass timing
+    let passDecisionQuality = map(p.decisions, 0, 100, 0.6, 1.4);
+    passBaseRate *= passDecisionQuality;
     if(p.position === "PG") passBaseRate *= 1.3;
     if(pressured) passBaseRate *= 1.5;
 
@@ -871,6 +897,8 @@ function updatePlayerAI(p) {
       let openness = min(nearestDefToT, 80);
       let closerToGoal = dToGoal - tDistToGoal;
       let score = openness * 1.0 + closerToGoal * 0.5;
+      // Better judgment = better target selection
+      score *= map(p.decisions, 0, 100, 0.7, 1.3);
       if(t.position === "SG" && tDistToGoal < 200) score += 20;
       if(t.position === "C" && tDistToGoal < 100) score += 25;
       if(score > bestScore) { bestScore = score; bestPass = t; }
@@ -1065,68 +1093,110 @@ function updatePlayerAI(p) {
       // チームワーク値で理想位置への精度が変わる
       let teamworkFactor = map(p.teamwork, 0, 100, 0.5, 1.0);
 
-      // NBAスタイル：各ポジションの理想的なスポット（コート端まで使用）
+      // "GET OPEN" MOVEMENT LOGIC - Players actively move away from defenders to receive passes
+      let nearestDef = null;
+      let nearestDefDist = 999;
+      let defPlayers = players.filter(d => d.team !== p.team);
+      for(let d of defPlayers) {
+        let defDist = dist(d.x, d.y, p.x, p.y);
+        if(defDist < nearestDefDist) {
+          nearestDefDist = defDist;
+          nearestDef = d;
+        }
+      }
+
+      // If defender is too close and handler is looking to pass, move away to get open
+      let handlerReadyToPass = handler && !handler.isJumping && dist(handler.x, handler.y, p.x, p.y) < 300;
+      let getOpenAdjustX = 0;
+      let getOpenAdjustY = 0;
+
+      if(nearestDef && nearestDefDist < 80 && handlerReadyToPass) {
+        // Move AWAY from defender to get open
+        let awayAngle = atan2(p.y - nearestDef.y, p.x - nearestDef.x);
+
+        // Use positioning stat to determine how well they get open
+        let moveQuality = map(p.positioning, 0, 100, 0.5, 1.5);
+
+        getOpenAdjustX = cos(awayAngle) * 60 * moveQuality;
+        getOpenAdjustY = sin(awayAngle) * 60 * moveQuality;
+
+        // Sprint to get open
+        p.speedMultiplier = SPEED_SPRINT;
+      }
+
+      // OPUS FIX: Much wider spacing, PG/SG outside 3P line, C/PF close to goal, SF dynamic
       if(pos === "PG") {
-        // PG: 3Pライン外（トップオブザキー）
+        // PG: 3Pライン外（トップオブザキー）- MUCH wider spacing
         if(handler && handler.position === "PG") {
-          targetX = tg.x - side * 280; // 3Pライン外
-          targetY = tg.y + (p.y > tg.y ? 100 : -100); // 上下に広がる
+          targetX = tg.x - side * 320; // 280 → 320 (farther from goal)
+          targetY = tg.y + (p.y > tg.y ? 140 : -140); // 100 → 140 (wider vertical spacing)
           p.speedMultiplier = SPEED_JOG;
         } else {
-          targetX = tg.x - side * 250; // 前進も3Pライン外
-          targetY = tg.y;
+          targetX = tg.x - side * 290; // 250 → 290 (farther out)
+          targetY = tg.y + (p.id % 2 === 0 ? -70 : 70); // Add vertical spacing
           p.speedMultiplier = SPEED_JOG;
         }
       } else if(pos === "SG") {
-        // SG: 補助的役割（PGをサポート）
+        // SG: ALWAYS outside 3P line (mostly perimeter)
         let handlerDist = handler ? dist(handler.x, handler.y, tg.x, tg.y) : 999;
         if(handlerDist < 150) {
-          // コーナー3P（サポート位置）
-          targetX = tg.x - side * 120; // 100 → 120
-          targetY = tg.y + (p.id % 2 === 0 ? -150 : 150);
+          // コーナー3P - farther out
+          targetX = tg.x - side * 220; // 120 → 220 (well beyond 3P line)
+          targetY = tg.y + (p.id % 2 === 0 ? -170 : 170); // 150 → 170 (wider)
         } else {
-          // ウィング3P（PGサポート）
-          targetX = tg.x - side * 200; // 260 → 200（PGに近づく）
-          targetY = tg.y + (p.id % 2 === 0 ? -135 : 135);
+          // ウィング3P - maintain perimeter
+          targetX = tg.x - side * 250; // 200 → 250 (beyond 3P line)
+          targetY = tg.y + (p.id % 2 === 0 ? -150 : 150); // 135 → 150 (wider)
         }
         p.speedMultiplier = SPEED_JOG;
       } else if(pos === "SF") {
-        // SF: 相手ゴール近くまで移動
+        // SF: Dynamic positioning based on judgment stat
+        let judgmentFactor = map(p.decisions, 0, 100, 0.3, 1.0); // Use decisions stat for judgment
         let cycle = (frameCount % 600) / 600;
-        if(cycle > 0.5) {
-          targetX = tg.x - side * 180; // 220 → 180（ゴールに近い）
-          targetY = tg.y + (p.id % 2 === 0 ? 125 : -125);
+        if(judgmentFactor > 0.7 && cycle > 0.5) {
+          // High judgment: Move to 3P line
+          targetX = tg.x - side * 210; // Outside 3P
+          targetY = tg.y + (p.id % 2 === 0 ? 140 : -140);
+        } else if(cycle > 0.6) {
+          // Mid-range position
+          targetX = tg.x - side * 130; // Mid-range
+          targetY = tg.y + (p.id % 2 === 0 ? -130 : 130);
         } else {
-          targetX = tg.x - side * 100; // 140 → 100（アタック位置）
-          targetY = tg.y + (p.id % 2 === 0 ? -110 : 110);
+          // Attack position (closer to goal)
+          targetX = tg.x - side * 70; // 100 → 70 (closer to paint)
+          targetY = tg.y + (p.id % 2 === 0 ? -120 : 120);
         }
         p.speedMultiplier = SPEED_JOG;
       } else if(pos === "PF") {
-        // PF: 相手ゴール近くまで移動
+        // PF: MUCH closer to goal (paint area)
         let cycle = (frameCount % 480) / 480;
         let toElbow = cycle > 0.6;
         if(toElbow) {
-          targetX = tg.x - side * 90; // エルボー
-          targetY = tg.y + (p.id % 2 === 0 ? -115 : 115);
+          targetX = tg.x - side * 60; // 90 → 60 (closer elbow)
+          targetY = tg.y + (p.id % 2 === 0 ? -120 : 120); // 115 → 120 (wider)
         } else {
-          targetX = tg.x - side * 50; // 130 → 50（ゴールに近い）
-          targetY = tg.y + (p.id % 2 === 0 ? -100 : 100);
+          targetX = tg.x - side * 25; // 50 → 25 (very close to basket)
+          targetY = tg.y + (p.id % 2 === 0 ? -105 : 105); // 100 → 105 (slightly wider)
         }
         p.speedMultiplier = SPEED_JOG;
       } else { // C
-        // C: ペイント〜ローポスト（最もゴールに近い）
+        // C: VERY close to goal (paint/low post)
         let cycle = (frameCount % 300) / 300;
         if(cycle < 0.7) {
-          // ローポスト（ペイント内）
-          targetX = tg.x - side * 30;
-          targetY = tg.y + (p.id % 2 === 0 ? 85 : -85); // ローポスト広く
+          // ローポスト（ペイント内）- closest to basket
+          targetX = tg.x - side * 15; // 30 → 15 (extremely close)
+          targetY = tg.y + (p.id % 2 === 0 ? 95 : -95); // 85 → 95 (wider)
         } else {
-          // ハイポスト
-          targetX = tg.x - side * 70;
-          targetY = tg.y;
+          // ハイポスト - still close
+          targetX = tg.x - side * 50; // 70 → 50 (closer)
+          targetY = tg.y + (p.id % 2 === 0 ? 40 : -40); // Add vertical offset
         }
         p.speedMultiplier = SPEED_JOG;
       }
+
+      // Apply "get open" adjustments to target position
+      targetX += getOpenAdjustX;
+      targetY += getOpenAdjustY;
 
       // チームワーク値が低いとランダムなずれ発生
       if(teamworkFactor < 0.8) {
@@ -1155,7 +1225,7 @@ function updatePlayerAI(p) {
       let myTeammates = players.filter(t => t.team === p.team && t.id !== p.id && (!handler || t.id !== handler.id));
       for(let t of myTeammates) {
         let dd = dist(targetX, targetY, t.x, t.y);
-      let minDist = 120; // 最小スペース大幅拡大（密集防止）
+      let minDist = 180; // 最小スペース大幅拡大（密集防止） - 120 → 180
         if(dd < minDist && dd > 0) {
           let pushAng = atan2(targetY - t.y, targetX - t.x);
           let pushStrength = (minDist - dd) * 0.7 * teamworkFactor;
@@ -1167,13 +1237,44 @@ function updatePlayerAI(p) {
       // ボールハンドラーとの距離も確保
       if(handler) {
         let handlerDist = dist(targetX, targetY, handler.x, handler.y);
-        if(handlerDist < 100) { // ボール周りの密集防止
+        if(handlerDist < 150) { // ボール周りの密集防止 - 100 → 150
           let pushAng = atan2(targetY - handler.y, targetX - handler.x);
-          targetX += cos(pushAng) * (100 - handlerDist) * 0.8;
+          targetX += cos(pushAng) * (150 - handlerDist) * 1.2; // 0.8 → 1.2 stronger push
           targetY += sin(pushAng) * (70 - handlerDist) * 0.8;
         }
       }
 
+      // OPUS FIX: Movement to receive passes (get open when marked)
+      if(handler && handler.id !== p.id) {
+        // Find closest defender
+        let defenders = players.filter(d => d.team !== p.team);
+        let nearestDef = defenders.sort((a, b) =>
+          dist(a.x, a.y, p.x, p.y) - dist(b.x, b.y, p.x, p.y))[0];
+
+        if(nearestDef) {
+          let defDist = dist(nearestDef.x, nearestDef.y, p.x, p.y);
+          // If heavily marked, move to get open
+          if(defDist < 45) {
+            // Use BBIQ (judgment) to find best escape direction
+            let smartMove = map(p.bbiq, 0, 100, 0.3, 1.0);
+            let escapeAngle;
+
+            if(smartMove > 0.7 && handler) {
+              // High BBIQ: Move toward ball handler's vision but away from defender
+              let toBallAngle = atan2(handler.y - p.y, handler.x - p.x);
+              let fromDefAngle = atan2(p.y - nearestDef.y, p.x - nearestDef.x);
+              escapeAngle = (toBallAngle + fromDefAngle) / 2; // Average angle
+            } else {
+              // Low BBIQ: Just move away from defender
+              escapeAngle = atan2(p.y - nearestDef.y, p.x - nearestDef.x);
+            }
+
+            targetX += cos(escapeAngle) * 60 * smartMove;
+            targetY += sin(escapeAngle) * 60 * smartMove;
+            p.speedMultiplier = SPEED_SPRINT; // Move quickly to get open
+          }
+        }
+      }
 
       moveToward(p, constrain(targetX,50,950), constrain(targetY,260,550), speed*0.8);
     } else {
@@ -1369,8 +1470,8 @@ function updatePlayerAI(p) {
 
       // ポストディフェンス：押し返し
       if(mark && mark.postingUp) {
-        let offensivePower = mark.power + mark.post * 0.6 + mark.strength * 0.4;
-        let defensivePower = p.power + p.def * 0.4 + p.strength * 0.6;
+        let offensivePower = mark.power + mark.rebound * 0.6 + mark.aggression * 0.4;
+        let defensivePower = p.power + p.marking * 0.4 + p.balance * 0.6;
         let powerDiff = (defensivePower - offensivePower) / 150;
 
         if(powerDiff > 0.1) {
@@ -1379,8 +1480,13 @@ function updatePlayerAI(p) {
           let pushAngle = atan2(mark.y - og.y, mark.x - og.x);
           mark.x += cos(pushAngle) * powerDiff * 2.5;
           mark.y += sin(pushAngle) * powerDiff * 2.5;
-          mark.x = constrain(mark.x, 25, 975);
-          mark.y = constrain(mark.y, 262.5, 550);
+          // OPUS FIX: Allow out-of-bounds during throw-in
+          let pushMinX = 15, pushMaxX = 985, pushMinY = 255, pushMaxY = 558; // Widen bounds: was 25/975, 262.5/550
+          if(throwInState && throwInState.thrower === mark.id) {
+            pushMinX = 0; pushMaxX = 1000; pushMinY = 240; pushMaxY = 575;
+          }
+          mark.x = constrain(mark.x, pushMinX, pushMaxX);
+          mark.y = constrain(mark.y, pushMinY, pushMaxY);
         }
       }
       if(mark) {
@@ -1554,6 +1660,10 @@ function updatePlayerAI(p) {
 }
 
 function moveToward(p, tx, ty, targetSpeed) {
+  // OPUS FIX: Cannot change direction while jumping (realistic physics)
+  if(p.isJumping && !p.hasBall) return; // Can't move while jumping (except ball handler)
+  if(p.isJumping && p.hasBall) targetSpeed *= 0.1; // Minimal movement for ball handler
+
   // 目標位置に十分近い場合は停止（震え防止）
   let distToTarget = dist(p.x, p.y, tx, ty);
   if(distToTarget < 3) {
@@ -1573,7 +1683,7 @@ function moveToward(p, tx, ty, targetSpeed) {
       p.y += sin(pushAngle) * pushForce;
       // コート内に制限
       // OPUS FIX: Allow out-of-bounds during ALL throw-in phases
-      let collMinX = 25, collMaxX = 975, collMinY = 262.5, collMaxY = 550;
+      let collMinX = 15, collMaxX = 985, collMinY = 255, collMaxY = 558; // Widen bounds: was 25/975, 262.5/550
       if(throwInState && throwInState.thrower === p.id) {
         collMinX = 0; collMaxX = 1000; collMinY = 240; collMaxY = 575;
       }
@@ -1615,12 +1725,17 @@ function moveToward(p, tx, ty, targetSpeed) {
 }
 
 function isPassSafe(passer, receiver) {
-  // パスコースの安全性を評価
+  // OPUS FIX: パスコースの安全性を評価 (vision/BBIQ consideration)
   if(!receiver) return false; // receiverが存在しない場合は危険
 
   let passX1 = passer.x, passY1 = passer.y;
   let passX2 = receiver.x, passY2 = receiver.y;
   let passDist = dist(passX1, passY1, passX2, passY2);
+
+  // Vision and BBIQ affect pass judgment
+  let visionFactor = map(passer.vision || 50, 0, 100, 0.7, 1.3); // Low vision = worse judgment
+  let bbiqFactor = map(passer.bbiq, 0, 100, 0.8, 1.2); // Low BBIQ = risky passes
+
   // パスコース上のディフェンダーをチェック
   let defenders = players.filter(d => d.team !== passer.team);
   for(let d of defenders) {
@@ -1632,18 +1747,21 @@ function isPassSafe(passer, receiver) {
       let projX = passX1 + dotProduct * lineX;
       let projY = passY1 + dotProduct * lineY;
       let distToLine = dist(d.x, d.y, projX, projY);
-      // 危険な距離：インターセプト能力を考慮
+      // 危険な距離：インターセプト能力を考慮 + Vision/BBIQ
       let interceptThreshold = map(d.steal, 0, 100, 20, 35); // インターセプト範囲縮小
       interceptThreshold *= map(d.speed, 0, 100, 0.8, 1.3);
+      // High vision/BBIQ = sees defenders better, requires more clearance
+      interceptThreshold *= visionFactor * bbiqFactor;
       if(distToLine < interceptThreshold) {
         return false; // 危険なパス
       }
     }
   }
   // レシーバーに近いディフェンダーもチェック
-  let nearReceiverDef = defenders.filter(d => dist(d.x, d.y, receiver.x, receiver.y) < 35); // レシーバー判定縮小
+  let receiverDefThreshold = 35 * visionFactor; // High vision = spots defenders better
+  let nearReceiverDef = defenders.filter(d => dist(d.x, d.y, receiver.x, receiver.y) < receiverDefThreshold);
   if(nearReceiverDef.length >= 2) return false; // ダブルチームへのパス禁止
-  if(nearReceiverDef.length >= 1 && passDist > 200) return false; // 遠距離パスで敵が近い場合禁止
+  if(nearReceiverDef.length >= 1 && passDist > 200 && bbiqFactor < 1.0) return false; // Low BBIQ = avoid risky long passes
 
 
   // コート境界チェック（パスルートが境界に近い場合は危険）
@@ -2233,10 +2351,14 @@ function checkRebound(side) {
   // リングとの衝突判定（リム部分のみ、通過部分を広く）
   let d = dist(ball.x, ball.y, rx, ry);
   if(abs(ball.z - rz) < 8 && d > rs - 3 && d < rs + 6) {
+    // Enhanced bounce physics based on angle of impact
     let ang = atan2(ball.y - ry, ball.x - rx), spH = sqrt(ball.vx*ball.vx + ball.vy*ball.vy);
-    ball.vx = cos(ang) * (spH * BOUNCE_FACTOR + 1.0);
-    ball.vy = sin(ang) * (spH * BOUNCE_FACTOR + 1.0);
-    ball.vz = ball.vz < 0 ? abs(ball.vz) * BOUNCE_FACTOR + 1.0 : ball.vz * BOUNCE_FACTOR;
+    let impactAngle = atan2(ball.vz, sqrt(ball.vx*ball.vx + ball.vy*ball.vy));
+    let bounceFactor = map(abs(impactAngle), 0, PI/2, BOUNCE_FACTOR * 1.2, BOUNCE_FACTOR * 0.8);
+
+    ball.vx = cos(ang) * (spH * bounceFactor + 1.0);
+    ball.vy = sin(ang) * (spH * bounceFactor + 1.0);
+    ball.vz = ball.vz < 0 ? abs(ball.vz) * bounceFactor + 1.0 : ball.vz * bounceFactor;
     goalChecked = false;
   }
 }
@@ -2257,17 +2379,19 @@ function updatePhysics() {
     ball.z = holder.z + 45 - dZ;
     ball.vx = 0; ball.vy = 0; ball.vz = 0; ball.passTarget = null; ball.lastTouch = holder.team;
   } else {
-    // 重力の適用
-    ball.vz -= BALL_GRAVITY * 0.5;
+    // 重力の適用 - enhanced with realistic bounce factor
+    ball.vz -= BALL_GRAVITY * 0.5 * (ball.z > 0 ? 1.0 : 0.8); // Less gravity when bouncing
 
-    // 空気抵抗の適用（水平方向のみ：垂直方向は重力のみで制御）
-    ball.vx *= AIR_RESISTANCE;
-    ball.vy *= AIR_RESISTANCE;
+    // 空気抵抗の適用 - differentiate vertical vs horizontal
+    ball.vx *= AIR_RESISTANCE * 0.998; // Slightly more horizontal resistance
+    ball.vy *= AIR_RESISTANCE * 0.998;
+    ball.vz *= 0.9999; // Less vertical resistance (more realistic arc)
 
-    // 位置の更新
-    ball.x += ball.vx * 0.5;
-    ball.y += ball.vy * 0.5;
-    ball.z += ball.vz * 0.5;
+    // 位置の更新 - enhanced for better accuracy
+    let timeStep = 0.5 * gameSpeed;
+    ball.x += ball.vx * timeStep;
+    ball.y += ball.vy * timeStep;
+    ball.z += ball.vz * timeStep;
 
     // パスターゲットへのキャッチ判定
     // パスインターセプト判定（ターゲットより先にチェック）
@@ -2369,15 +2493,14 @@ function updatePhysics() {
       oob = true;
       oobType = 'baseline';
 
-      // ゴール下のカラー（台形ライン）あたりから
-      // PlayerTeam goal: x=861.25 (right), DefenderTeam goal: x=138.75 (left)
+      // OPUS FIX: Throw-in from OUTSIDE the baseline
       if(ball.x < 12.5) {
-        // 左側ゴール裏に出た → 左ベースライン、ゴール下から
-        thX = 18.75;
+        // 左側ゴール裏に出た → 左ベースライン外から
+        thX = 5;
         thY = 388.75; // センター付近（ゴール下のカラーエリア）
       } else {
-        // 右側ゴール裏に出た → 右ベースライン、ゴール下から
-        thX = 981.25;
+        // 右側ゴール裏に出た → 右ベースライン外から
+        thX = 995;
         thY = 388.75;
       }
     }
@@ -2423,7 +2546,7 @@ function checkGoal(side, net) {
       for(let i=0;i<50;i++) particles.push({x:rx,y:finalGoal.ringY,vx:random(-5,5),vy:random(-5,5),life:60,color:side===1?[0,150,255]:[255,50,50]});
       addFloatingText(rx, finalGoal.ringY - 50, ball.is3pt ? "+3!" : "+2!", side===1?[0,200,255]:[255,100,100]);
       let newTeam = side === 1 ? "DefenderTeam" : "PlayerTeam";
-      let thX = side === 1 ? 975 : 25; // 得点したゴールの側のベースラインから
+      let thX = side === 1 ? 995 : 5; // 得点したゴールの側のベースラインから - OUTSIDE court (was 975/25, now 995/5)
 
       // ゴール後：新しい守備側は素早く自陣に戻る
       players.forEach(p => {
@@ -2504,9 +2627,6 @@ function drawCourtAndBackboard() {
   stroke(255); strokeWeight(2);
   drawSpline(p7); drawSpline(p7.map(pt=>({x:1000-pt.x,y:pt.y})));
 
-  // 電子スコアボード（コート奥側）
-  drawScoreboard();
-
   // バックボードと支柱
   renderBackboardAndPole(1); renderBackboardAndPole(-1);
 }
@@ -2558,99 +2678,6 @@ function drawGymnasiumFloor() {
   beginShape();
   for(let pt of [court.tl,court.tr,court.br,court.bl]) vertex(pt.x,pt.y);
   endShape(CLOSE);
-}
-
-// 電子スコアボード（コート奥側に配置）
-function drawScoreboard() {
-  // スコアボードの位置（コート中央上部、奥側）
-  let sbX = 500;
-  let sbY = 165;
-  let sbWidth = 460;
-  let sbHeight = 110;
-
-  // スコアボードの影
-  noStroke();
-  fill(0, 0, 0, 40);
-  rect(sbX - sbWidth/2 + 5, sbY - sbHeight/2 + 5, sbWidth, sbHeight, 4);
-
-  // スコアボードの外枠（黒いフレーム）
-  fill(20, 20, 25);
-  stroke(40, 40, 50);
-  strokeWeight(3);
-  rect(sbX - sbWidth/2, sbY - sbHeight/2, sbWidth, sbHeight, 4);
-
-  // 内側のパネル（ダークグレー）
-  fill(30, 30, 35);
-  noStroke();
-  rect(sbX - sbWidth/2 + 5, sbY - sbHeight/2 + 5, sbWidth - 10, sbHeight - 10, 2);
-
-  // 上部：チーム名と時間表示（RED 20:14 BLUE形式）
-  textAlign(CENTER, CENTER);
-  textFont('sans-serif');
-  textSize(14);
-
-  // RED（左）
-  fill(255, 100, 100);
-  text("RED", sbX - 120, sbY - 40);
-
-  // 時間表示（中央）
-  fill(200, 200, 220);
-  let minutes = floor(gameTime / 60);
-  let seconds = gameTime % 60;
-  text(minutes.toString().padStart(2, '0') + ":" + seconds.toString().padStart(2, '0'), sbX, sbY - 40);
-
-  // BLUE（右）
-  fill(0, 255, 255);
-  text("BLUE", sbX + 120, sbY - 40);
-
-  // 大きなスコア表示（LED風）
-  textSize(52);
-  textFont('monospace');
-
-  // REDスコア（左側、大きく）
-  fill(255, 50, 50, 230);
-  stroke(200, 40, 40);
-  strokeWeight(2);
-  text(scoreDefender, sbX - 120, sbY + 5);
-
-  // BLUEスコア（右側、大きく）
-  fill(0, 255, 255, 230);
-  stroke(0, 200, 200);
-  strokeWeight(2);
-  text(scorePlayer, sbX + 120, sbY + 5);
-
-  // 中央下部：クォーター別スコア（縦4行）
-  textSize(10);
-  textFont('sans-serif');
-  noStroke();
-
-  let qX = sbX; // 中央に配置
-  let qStartY = sbY + 30;
-  let qSpacing = 12;
-
-  for(let i = 0; i < 4; i++) {
-    let qY = qStartY + i * qSpacing;
-
-    // REDスコア（左）
-    let redColor = i === quarter - 1 ? [255, 100, 100] : [150, 80, 80];
-    fill(redColor[0], redColor[1], redColor[2]);
-    textAlign(RIGHT, CENTER);
-    text(quarterScoresDefender[i], qX - 15, qY);
-
-    // クォーター番号と横棒
-    fill(100, 100, 110);
-    textAlign(CENTER, CENTER);
-    text("-", qX, qY);
-
-    // BLUEスコア（右）
-    let blueColor = i === quarter - 1 ? [0, 255, 255] : [80, 130, 130];
-    fill(blueColor[0], blueColor[1], blueColor[2]);
-    textAlign(LEFT, CENTER);
-    text(quarterScoresPlayer[i], qX + 15, qY);
-  }
-
-  textFont('sans-serif');
-  textAlign(LEFT, TOP);
 }
 
 function drawPaintSet(side) {
