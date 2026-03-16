@@ -533,9 +533,9 @@ function updatePlayerAI(p) {
       let target = openTeammates.length > 0 ? 
         openTeammates.sort((a,b) => dist(p.x,p.y,a.x,a.y) - dist(p.x,p.y,b.x,b.y))[0] :
         teammates.sort((a,b) => dist(p.x,p.y,a.x,a.y) - dist(p.x,p.y,b.x,b.y))[0];
-      if(target && dist(p.x, p.y, target.x, target.y) < 250 && throwInState.timer > 90) {
-        if(isPassSafe(p, target)) {
-          // スローイン専用のパス処理
+      // 3秒以上経過：強制的にスローイン（安全性無視）
+      if(throwInState.timer > 180) {
+        if(target) { // 強制スロー：距離制限なし
           let d = dist(p.x, p.y, target.x, target.y);
           let spd = 7, t = d / spd;
           ball.x = p.x; ball.y = p.y; ball.z = 45;
@@ -544,12 +544,14 @@ function updatePlayerAI(p) {
           ball.vz = 2.5;
           ball.passTarget = target.id;
           ball.lastTouch = p.team;
-          throwInState = null; // スローイン完了
+          throwInState = null;
+          addFloatingText(p.x, p.y - 40, "THROW-IN", [100, 255, 100]);
           return;
         }
-      } else if(throwInState.timer > 180) {
-        // 3秒経過：強制的にスローイン（安全性無視）
-        if(target && dist(p.x, p.y, target.x, target.y) < 300) {
+      }
+      // 1.5秒以降：安全なパスを試みる
+      if(target && dist(p.x, p.y, target.x, target.y) < 250 && throwInState.timer > 90) {
+        if(isPassSafe(p, target)) {
           let d = dist(p.x, p.y, target.x, target.y);
           let spd = 7, t = d / spd;
           ball.x = p.x; ball.y = p.y; ball.z = 45;
@@ -569,24 +571,13 @@ function updatePlayerAI(p) {
     p.speedMultiplier = SPEED_WALK; // 受け取る位置への微調整は歩き
     let thrower = players.find(pl => pl.id === throwInState.thrower);
     if(thrower) {
-      let currentDist = dist(p.x, p.y, thrower.x, thrower.y);
-      // スロワーから遠すぎる場合は直接近づく
-      if(currentDist > 250) {
-        p.speedMultiplier = SPEED_JOG;
-        moveToward(p, thrower.x, thrower.y, p.spd * 0.05);
-      } else {
-        // 適度な距離に配置
-        let ang = atan2(p.y - thrower.y, p.x - thrower.x);
-        let targetDist = 120 + (p.id % 3) * 20;
-        let tx = thrower.x + cos(ang) * targetDist;
-        let ty = thrower.y + sin(ang) * targetDist;
-        moveToward(p, constrain(tx, 125, 875), constrain(ty, 275, 537.5), p.spd * 0.04);
-      }
-    }
-    return;
+      // スロワーから適度な距離に移動
+      let ang = atan2(p.y - thrower.y, p.x - thrower.x);
+      let targetDist = 120 + (p.id % 3) * 20; // 近づく
   }
   // スローイン中：ディフェンス側は自陣へ戻る
   if(throwInState && p.team !== throwInState.team) {
+    // 相手チームのスローイン中
     let halfCourt = 500;
     let isInOpponentHalf = (p.team === "PlayerTeam" && p.x > halfCourt) ||
                             (p.team === "DefenderTeam" && p.x < halfCourt);
@@ -596,8 +587,18 @@ function updatePlayerAI(p) {
       let backX = (p.team === "PlayerTeam" ? 350 : 650);
       let backY = 388.75 + (p.id % 3 - 1) * 50;
       moveToward(p, backX, backY, p.spd * 0.04);
-      return;
+      // スロワーから遠すぎる場合は近づく
+      let currentDist = dist(p.x, p.y, thrower.x, thrower.y);
+      if(currentDist > 250) {
+        // 直接スロワーに向かう
+        moveToward(p, thrower.x, thrower.y, p.spd * 0.06);
+        return;
+      }
+      let tx = thrower.x + cos(ang) * targetDist;
+      let ty = thrower.y + sin(ang) * targetDist;
+      moveToward(p, constrain(tx, 125, 875), constrain(ty, 275, 537.5), p.spd * 0.04);
     }
+    return;
   }
   if(p.lock > 0) { p.lock--; }
   let isOffense = p.team === possession;
