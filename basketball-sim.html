@@ -465,6 +465,20 @@ function drawScoreboard() {
   textFont('Arial');
   text("SHOT: " + shotClock, centerX + centerW/2, teamY + 58);
 
+  // Quarter scores (small display below shot clock)
+  textSize(10);
+  textFont('Arial');
+  fill(180, 180, 200);
+  let qScoreY = teamY + 68;
+  let qScoreText = "";
+  for(let i = 0; i < 4; i++) {
+    let qNum = i + 1;
+    let blueQ = quarterScoresPlayer[i] || 0;
+    let redQ = quarterScoresDefender[i] || 0;
+    qScoreText += "Q" + qNum + ":" + blueQ + "-" + redQ + "  ";
+  }
+  text(qScoreText.trim(), centerX + centerW/2, qScoreY);
+
   pop();
 }
 
@@ -472,11 +486,11 @@ function drawPlayer(p) {
   let baseColor = p.team === "PlayerTeam" ? [0,150,255] : [255,50,50];
   let darkColor = p.team === "PlayerTeam" ? [0,100,200] : [200,30,30];
 
-  // 影（リアル・動的）
+  // 影（リアル・動的）- 足元に表示
   let shadowSize = p.size * 1.3 + p.z * 0.15;
   let shadowAlpha = 60 - p.z * 0.3;
   noStroke(); fill(0, 0, 0, shadowAlpha);
-  ellipse(p.x, p.y, shadowSize, shadowSize * 0.4);
+  ellipse(p.x, p.y + 12, shadowSize, shadowSize * 0.4); // Y座標を+12して足元に表示
 
   let yOff = p.z + (p.hasBall && !p.isJumping ? sin(p.dribblePhase)*2 : 0);
   let px = p.x, py = p.y - yOff;
@@ -913,6 +927,13 @@ function updatePlayerAI(p) {
       if(nearest && isPassSafe(p, nearest)) { passTo(p, nearest); return; }
     }
 
+    // ②シュート判断（高優先度 - ダブルチーム以外）
+    let shootDist = 170, shootChance = 0.15; // 積極性UP
+    if(p.position === "SG") { shootDist = 240; shootChance = 0.22; } // SGは積極的にシュート
+    else if(p.position === "SF") { shootDist = 210; shootChance = 0.18; }
+    else if(p.position === "C" || p.position === "PF") { shootDist = 150; shootChance = 0.25; } // インサイドは高確率
+    else if(p.position === "PG") { shootDist = 220; shootChance = 0.14; } // PGも積極的に
+
     // ショットクロック急迫時は強制シュート
     if(shotClock < 5 && dToGoal < 300) {
       shootChance = 0.95; // ほぼ確実にシュート
@@ -920,12 +941,6 @@ function updatePlayerAI(p) {
     } else if(shotClock < 8 && dToGoal < shootDist * 1.2) {
       shootChance *= 2.0; // 積極的に
     }
-    // ②シュート判断（高優先度 - ダブルチーム以外）
-    let shootDist = 170, shootChance = 0.15; // 積極性UP
-    if(p.position === "SG") { shootDist = 240; shootChance = 0.22; } // SGは積極的にシュート
-    else if(p.position === "SF") { shootDist = 210; shootChance = 0.18; }
-    else if(p.position === "C" || p.position === "PF") { shootDist = 150; shootChance = 0.25; } // インサイドは高確率
-    else if(p.position === "PG") { shootDist = 220; shootChance = 0.14; } // PGも積極的に
 
     if(!pressured && dToGoal < shootDist * 0.8) shootChance *= 3.5; // ゴール近くは超積極的
     if(pressured) shootChance *= 0.8; // プレッシャー時も少し積極的
