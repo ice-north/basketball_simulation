@@ -263,6 +263,35 @@ function buildRosterUI() {
 function draw() {
   background(40,40,60);
 
+  // 詳細な床板レンダリング（50枚以上）
+  push();
+  let boardWidth = (987.5 - 12.5) / 52; // 52枚の板
+  for(let bx = 0; bx < 52; bx++) {
+    let x = 12.5 + bx * boardWidth;
+    // 交互に色を変える（木目のバリエーション）
+    let baseColor = bx % 2 === 0 ? [200, 145, 95] : [210, 155, 105];
+    // 微妙な明るさのランダム性
+    let brightness = 1 + (Math.sin(bx * 0.5) * 0.05);
+    noStroke();
+    fill(baseColor[0] * brightness, baseColor[1] * brightness, baseColor[2] * brightness);
+    rect(x, 250, boardWidth, 312.5);
+
+    // 板の境界線（微妙なライン）
+    stroke(180, 130, 85, 60);
+    strokeWeight(1);
+    line(x, 250, x, 562.5);
+  }
+
+  // 木目のテクスチャ（微妙な横線）
+  stroke(190, 140, 90, 20);
+  strokeWeight(0.5);
+  for(let ty = 250; ty < 562.5; ty += 8) {
+    let offset = Math.sin(ty * 0.1) * 3;
+    line(12.5 + offset, ty, 987.5 + offset, ty);
+  }
+  pop();
+
+
   // ジャンプボール中は時間を止める（速度倍率対応）
   if (frameCount % Math.floor(60 / gameSpeed) === 0 && gameState === "playing" && !throwInState && !jumpBallState) {
     gameTime--; shotClock--;
@@ -740,6 +769,38 @@ function updatePlayerAI(p) {
     }
     let handler = players.find(pl=>pl.hasBall);
     if(handler) {
+      // PGがボールを運んでいるとき、他の選手は前方へ移動
+      if(handler.bringingBallUp && handler.position === "PG") {
+        // 攻めるゴールの方向へ移動
+        let tg = p.team === "PlayerTeam" ? {x:finalGoal.ringX, y:finalGoal.ringY} : {x:1000-finalGoal.ringX, y:finalGoal.ringY};
+
+        // ポジション別の位置取り
+        let pos = p.position;
+        let targetX, targetY;
+
+        if(pos === "SG" || pos === "SF") {
+          // ウイング: 45度の位置
+          targetX = tg.x + (p.team === "PlayerTeam" ? -150 : 150);
+          targetY = p.id % 2 === 0 ? tg.y - 100 : tg.y + 100;
+        } else if(pos === "PF" || pos === "C") {
+          // ビッグマン: ペイントエリア付近
+          targetX = tg.x + (p.team === "PlayerTeam" ? -80 : 80);
+          targetY = tg.y + (p.id % 2 === 0 ? -50 : 50);
+        } else {
+          // 他: トップ付近
+          targetX = tg.x + (p.team === "PlayerTeam" ? -200 : 200);
+          targetY = tg.y;
+        }
+
+        // 境界内に制限
+        targetX = constrain(targetX, 50, 950);
+        targetY = constrain(targetY, 260, 550);
+
+        p.speedMultiplier = SPEED_RUN;
+        moveToward(p, targetX, targetY, speed);
+        return;
+      }
+
       // スクリーン実行中
       if(p.isScreening && p.screenTimer > 0) {
         p.screenTimer--;
@@ -1355,6 +1416,19 @@ function isPassSafe(passer, receiver) {
   let nearReceiverDef = defenders.filter(d => dist(d.x, d.y, receiver.x, receiver.y) < 35); // レシーバー判定縮小
   if(nearReceiverDef.length >= 2) return false; // ダブルチームへのパス禁止
   if(nearReceiverDef.length >= 1 && passDist > 200) return false; // 遠距離パスで敵が近い場合禁止
+
+
+  // コート境界チェック（パスルートが境界に近い場合は危険）
+  let midX = (passer.x + receiver.x) / 2;
+  let midY = (passer.y + receiver.y) / 2;
+  if(midX < 50 || midX > 950 || midY < 270 || midY > 545) {
+    return false; // パスルートが境界に近すぎる
+  }
+
+  // レシーバーが境界に近い場合も危険
+  if(receiver.x < 40 || receiver.x > 960 || receiver.y < 265 || receiver.y > 550) {
+    return false; // レシーバーが境界に近すぎる
+  }
 
   return true; // 安全なパス
 }
@@ -2028,8 +2102,34 @@ function updatePhysics() {
 
     checkRebound(1); checkRebound(-1);
     let oob = false, thX = ball.x, thY = ball.y;
-    if(ball.y < 250 || ball.y > 562.5) { oob = true; thY = ball.y < 250 ? 256.25 : 556.25; thX = constrain(ball.x, 62.5, 937.5); }
-    if(ball.x < 12.5 || ball.x > 987.5) { oob = true; thX = ball.x < 12.5 ? 18.75 : 981.25; thY = constrain(ball.y, 275, 537.5); }
+    let oobType = null; // 'sideline' or 'baseline'
+
+    // サイドライン（上下）
+    if(ball.y < 250 || ball.y > 562.5) {
+      oob = true;
+      oobType = 'sideline';
+      thY = ball.y < 250 ? 256.25 : 556.25;
+      thX = constrain(ball.x, 62.5, 937.5); // 出た場所から
+    }
+
+    // ベースライン（左右＝ゴール裏）
+    if(ball.x < 12.5 || ball.x > 987.5) {
+      oob = true;
+      oobType = 'baseline';
+
+      // ゴール下のカラー（台形ライン）あたりから
+      // PlayerTeam goal: x=861.25 (right), DefenderTeam goal: x=138.75 (left)
+      if(ball.x < 12.5) {
+        // 左側ゴール裏に出た → 左ベースライン、ゴール下から
+        thX = 18.75;
+        thY = 388.75; // センター付近（ゴール下のカラーエリア）
+      } else {
+        // 右側ゴール裏に出た → 右ベースライン、ゴール下から
+        thX = 981.25;
+        thY = 388.75;
+      }
+    }
+
     if(oob && ball.z < 30) {
       let newTeam = ball.lastTouch === "PlayerTeam" ? "DefenderTeam" : "PlayerTeam";
       startThrowIn(newTeam, thX, thY, "OUT OF BOUNDS");
