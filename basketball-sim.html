@@ -860,29 +860,34 @@ function evaluateShotQuality(shooter, distanceToBasket, situation) {
     default: effectiveRange = 220;
   }
 
-  // 射程外ペナルティ
+  // 射程外ペナルティ（緩和）
   if (distanceToBasket > effectiveRange) {
-    quality -= (distanceToBasket - effectiveRange) * 0.5;
+    quality -= (distanceToBasket - effectiveRange) * 0.3; // 0.5 → 0.3
   }
 
-  // ディフェンスコンテスト
+  // ディフェンスコンテスト（大幅緩和）
   let contest = situation.pressureLevel;
-  let contestImpact = map(shooter.sht, 0, 100, 50, 20); // シュート力が高いほどプレッシャーに強い
+  let contestImpact = map(shooter.sht, 0, 100, 25, 10); // 50,20 → 25,10（半減）
   quality -= contest * contestImpact / 100;
 
-  // ショットクロックプレッシャー
-  if (situation.shotClockUrgency < 0.2) {
-    quality -= 30; // 強制シュートペナルティ
-  }
+  // ショットクロックプレッシャー（削除 - 後で別処理）
+  // if (situation.shotClockUrgency < 0.2) {
+  //   quality -= 30;
+  // }
 
-  // オープンシュートボーナス
+  // オープンシュートボーナス（増加）
   if (contest < 30) {
-    quality += 25;
+    quality += 35; // 25 → 35
   }
 
-  // スタミナの影響
+  // 近距離ボーナス追加
+  if (distanceToBasket < effectiveRange * 0.7) {
+    quality += 20;
+  }
+
+  // スタミナの影響（緩和）
   let fatigue = shooter.stamina / shooter.maxStamina;
-  quality *= map(fatigue, 0.5, 1.0, 0.8, 1.0);
+  quality *= map(fatigue, 0.3, 1.0, 0.85, 1.0); // 0.5,1.0,0.8,1.0 → 0.3,1.0,0.85,1.0
 
   return constrain(quality, 0, 100);
 }
@@ -1435,12 +1440,15 @@ function updatePlayerAI(p) {
     let outnumbered = enemiesForward - alliesForward >= 2;
     let fastBreak = alliesForward > enemiesForward && dToGoal > 200; // 速攻チャンス
 
-    // パス判断（新AI：状況認識に基づく）
-    let passBaseRate = map(p.vision, 0, 100, 0.003, 0.012);
-    let passDecisionQuality = map(p.decisions, 0, 100, 0.6, 1.4);
+    // パス判断（新AI：状況認識に基づく）- 大幅に削減
+    let passBaseRate = map(p.vision, 0, 100, 0.001, 0.006); // 0.003,0.012 → 0.001,0.006（半減）
+    let passDecisionQuality = map(p.decisions, 0, 100, 0.7, 1.2); // 0.6,1.4 → 0.7,1.2
     passBaseRate *= passDecisionQuality;
-    if(p.position === "PG") passBaseRate *= 1.3; // PGはパス優先
-    if(pressured) passBaseRate *= 1.5;
+    if(p.position === "PG") passBaseRate *= 1.2; // 1.3 → 1.2
+    if(pressured) passBaseRate *= 1.3; // 1.5 → 1.3
+
+    // ゴール近くではパスを減らす
+    if(dToGoal < 120) passBaseRate *= 0.3;
 
     // 新しいパス評価システムを使用
     let passOptions = evaluatePassOptions(p, situation);
@@ -1469,31 +1477,36 @@ function updatePlayerAI(p) {
     // シュート品質を評価
     let shotQuality = evaluateShotQuality(p, dToGoal, situation);
 
-    // ポジション別の射程と傾向
-    let shootDist = 170, baseShootChance = 0.15;
-    if(p.position === "SG") { shootDist = 240; baseShootChance = 0.22; }
-    else if(p.position === "SF") { shootDist = 210; baseShootChance = 0.18; }
-    else if(p.position === "C" || p.position === "PF") { shootDist = 150; baseShootChance = 0.25; }
-    else if(p.position === "PG") { shootDist = 220; baseShootChance = 0.14; }
+    // ポジション別の射程と傾向（ベース確率を大幅UP）
+    let shootDist = 170, baseShootChance = 0.25; // 0.15 → 0.25
+    if(p.position === "SG") { shootDist = 240; baseShootChance = 0.35; } // 0.22 → 0.35
+    else if(p.position === "SF") { shootDist = 210; baseShootChance = 0.28; } // 0.18 → 0.28
+    else if(p.position === "C" || p.position === "PF") { shootDist = 150; baseShootChance = 0.40; } // 0.25 → 0.40
+    else if(p.position === "PG") { shootDist = 220; baseShootChance = 0.22; } // 0.14 → 0.22
 
-    // シュート品質に基づいて確率を調整
-    let shootChance = baseShootChance * map(shotQuality, 0, 100, 0.3, 2.5);
+    // シュート品質に基づいて確率を調整（係数も緩和）
+    let shootChance = baseShootChance * map(shotQuality, 0, 100, 0.5, 2.0); // 0.3,2.5 → 0.5,2.0
 
     // ショットクロック緊急時は強制シュート
     if(shotClock < 5 && dToGoal < 300) {
-      shootChance = 0.95;
+      shootChance = 0.98; // ほぼ確実
       shootDist = 300;
     } else if(shotClock < 8 && dToGoal < shootDist * 1.2) {
-      shootChance *= 1.8;
+      shootChance *= 2.2; // 1.8 → 2.2
     }
 
     // 高品質シュート（オープン＆近距離）は積極的に
-    if(shotQuality > 70 && dToGoal < shootDist * 0.8) {
+    if(shotQuality > 65 && dToGoal < shootDist * 0.8) { // 70 → 65
+      shootChance *= 3.0; // 2.5 → 3.0
+    }
+
+    // 近距離なら品質に関わらず積極的
+    if(!pressured && dToGoal < shootDist * 0.6) {
       shootChance *= 2.5;
     }
 
-    // 意思決定能力が高いほど良いタイミングでシュート
-    shootChance *= map(p.decisions, 0, 100, 0.7, 1.3);
+    // 意思決定能力が高いほど良いタイミングでシュート（影響度軽減）
+    shootChance *= map(p.decisions, 0, 100, 0.85, 1.15); // 0.7,1.3 → 0.85,1.15
 
     if(dToGoal < shootDist && random() < shootChance && !p.isJumping) {
       p.isJumping = true; p.mustShoot = true;
@@ -1518,20 +1531,22 @@ function updatePlayerAI(p) {
       initiateScreen(p);
     }
 
-    // ⑤通常パス（低頻度：カッティング、オープン味方、PG戻し）
+    // ⑤通常パス（極めて低頻度：本当に良い機会のみ）
     let cuttingMate = teammates.find(t => t.isCutting && dist(p.x, p.y, t.x, t.y) < 250);
-    if(cuttingMate && random() < passBaseRate * 1.5) {
+    if(cuttingMate && random() < passBaseRate * 1.2 && dToGoal > 100) { // 1.5 → 1.2、ゴール近くでは無視
       if(isPassSafe(p, cuttingMate)) { passTo(p, cuttingMate); return; }
     }
-    if(bestPass && random() < passBaseRate && bestScore > 50) {
+    // ベストパスは明らかに良い場合のみ
+    if(bestPass && random() < passBaseRate * 0.8 && bestScore > 70) { // 係数1.0→0.8、スコア50→70
       if(bestPass && isPassSafe(p, bestPass)) { passTo(p, bestPass); return; }
     }
-    if(p.position !== "PG" && dToGoal > 150) {
-      let pgMate = teammates.find(t => t.position === "PG" && dist(p.x, p.y, t.x, t.y) < 250);
-      if(pgMate && pressured && random() < passBaseRate) {
-        if(pgMate && isPassSafe(p, pgMate)) { passTo(p, pgMate); return; }
-      }
-    }
+    // PG戻しは削除（パス過多の原因）
+    // if(p.position !== "PG" && dToGoal > 150) {
+    //   let pgMate = teammates.find(t => t.position === "PG" && dist(p.x, p.y, t.x, t.y) < 250);
+    //   if(pgMate && pressured && random() < passBaseRate) {
+    //     if(pgMate && isPassSafe(p, pgMate)) { passTo(p, pgMate); return; }
+    //   }
+    // }
 
     // ⑥数的不利時：無理せず展開
     if(outnumbered && dToGoal > 150) {
@@ -2201,11 +2216,14 @@ function moveToward(p, tx, ty, targetSpeed) {
       p.x += cos(pushAngle) * pushForce;
       p.y += sin(pushAngle) * pushForce;
       // コート内に制限
-      // OPUS FIX: Allow out-of-bounds during ALL throw-in phases
-      let collMinX = 15, collMaxX = 985, collMinY = 255, collMaxY = 558; // Widen bounds: was 25/975, 262.5/550
-      if(throwInState && throwInState.thrower === p.id) {
+      // OPUS FIX: Allow out-of-bounds during ALL throw-in phases and loose balls
+      let collMinX = 15, collMaxX = 985, collMinY = 255, collMaxY = 558;
+
+      // スローイン中またはルーズボール時はコート外移動を許可
+      if(throwInState || (ball.z < 60 && !players.some(pl => pl.hasBall))) {
         collMinX = 0; collMaxX = 1000; collMinY = 240; collMaxY = 575;
       }
+
       p.x = constrain(p.x, collMinX, collMaxX);
       p.y = constrain(p.y, collMinY, collMaxY);
     }
@@ -2232,13 +2250,16 @@ function moveToward(p, tx, ty, targetSpeed) {
   let dampingFactor = distToTarget < 20 ? map(distToTarget, 0, 20, 0.3, 1.0) : 1.0;
   let actualSpeed = p.currentSpeed * dampingFactor;
 
-  // OPUS FIX: Allow out-of-bounds during ALL throw-in phases
+  // OPUS FIX: Allow out-of-bounds during ALL throw-in phases and loose balls
   let minX = 25, maxX = 975, minY = 262.5, maxY = 550;
-  if(throwInState && throwInState.thrower === p.id) {
-    // Expand bounds to reach out-of-bounds ball and move to throw-in position
+
+  // スローイン中またはルーズボール時はコート外移動を許可
+  if(throwInState || (ball.z < 60 && !players.some(pl => pl.hasBall))) {
+    // 全選手が境界外に移動可能
     minX = 0; maxX = 1000;
     minY = 240; maxY = 575;
   }
+
   p.x = constrain(p.x + cos(a)*actualSpeed, minX, maxX);
   p.y = constrain(p.y + sin(a)*actualSpeed, minY, maxY);
 }
