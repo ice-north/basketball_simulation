@@ -2287,51 +2287,45 @@ function isPassSafe(passer, receiver) {
   let passX2 = receiver.x, passY2 = receiver.y;
   let passDist = dist(passX1, passY1, passX2, passY2);
 
-  // Vision and BBIQ affect pass judgment
-  let visionFactor = map(passer.vision || 50, 0, 100, 0.7, 1.3); // Low vision = worse judgment
-  let bbiqFactor = map(passer.bbiq, 0, 100, 0.8, 1.2); // Low BBIQ = risky passes
+  // Vision affects pass judgment (NBA 2K準拠：緩和)
+  let visionFactor = map(passer.vision || 50, 0, 100, 0.8, 1.2); // 0.7,1.3 → 0.8,1.2
 
-  // パスコース上のディフェンダーをチェック
+  // パスコース上のディフェンダーをチェック（NBA 2K準拠：より寛容に）
   let defenders = players.filter(d => d.team !== passer.team);
   for(let d of defenders) {
     // ディフェンダーとパスラインの距離を計算
     let lineX = passX2 - passX1;
     let lineY = passY2 - passY1;
     let dotProduct = ((d.x - passX1) * lineX + (d.y - passY1) * lineY) / Math.max(passDist * passDist, 0.001);
-    if(dotProduct > 0 && dotProduct < 1) { // ディフェンダーがパスライン上
+    if(dotProduct > 0.1 && dotProduct < 0.9) { // 中央80%のみチェック（端は無視）
       let projX = passX1 + dotProduct * lineX;
       let projY = passY1 + dotProduct * lineY;
       let distToLine = dist(d.x, d.y, projX, projY);
-      // 危険な距離：インターセプト能力を考慮 + Vision/BBIQ
-      let interceptThreshold = map(d.steal, 0, 100, 20, 35); // インターセプト範囲縮小
-      interceptThreshold *= map(d.speed, 0, 100, 0.8, 1.3);
-      // High vision/BBIQ = sees defenders better, requires more clearance
-      interceptThreshold *= visionFactor * bbiqFactor;
+
+      // NBA 2K準拠：ディフェンダーが非常に近い場合のみブロック
+      let interceptThreshold = map(d.stl, 0, 100, 12, 20); // 20-35 → 12-20（大幅縮小）
+      interceptThreshold *= map(passer.pas, 0, 100, 0.7, 1.3); // パス能力で調整
+      interceptThreshold *= visionFactor;
+
       if(distToLine < interceptThreshold) {
         return false; // 危険なパス
       }
     }
   }
-  // レシーバーに近いディフェンダーもチェック
-  let receiverDefThreshold = 35 * visionFactor; // High vision = spots defenders better
-  let nearReceiverDef = defenders.filter(d => dist(d.x, d.y, receiver.x, receiver.y) < receiverDefThreshold);
-  if(nearReceiverDef.length >= 2) return false; // ダブルチームへのパス禁止
-  if(nearReceiverDef.length >= 1 && passDist > 200 && bbiqFactor < 1.0) return false; // Low BBIQ = avoid risky long passes
+
+  // レシーバー付近のチェック（大幅緩和）
+  let nearReceiverDef = defenders.filter(d => dist(d.x, d.y, receiver.x, receiver.y) < 25); // 35→25
+  if(nearReceiverDef.length >= 3) return false; // 3人以上のダブルチームのみ禁止（2→3）
+  // ロングパスの制限を削除（NBA 2Kではロングパスも通る）
 
 
-  // コート境界チェック（パスルートが境界に近い場合は危険）
-  let midX = (passer.x + receiver.x) / 2;
-  let midY = (passer.y + receiver.y) / 2;
-  if(midX < 50 || midX > 950 || midY < 270 || midY > 545) {
-    return false; // パスルートが境界に近すぎる
+  // コート境界チェック（NBA 2K準拠：緩和）
+  // レシーバーがコート内にいればOK（境界ギリギリでも可）
+  if(receiver.x < 30 || receiver.x > 970 || receiver.y < 260 || receiver.y > 555) {
+    return false; // レシーバーが完全にアウト
   }
 
-  // レシーバーが境界に近い場合も危険
-  if(receiver.x < 40 || receiver.x > 960 || receiver.y < 265 || receiver.y > 550) {
-    return false; // レシーバーが境界に近すぎる
-  }
-
-  return true; // 安全なパス
+  return true; // 安全なパス（NBA 2K準拠：ほとんどのパスを許可）
 }
 
 function passTo(passer, receiver) {
@@ -2949,29 +2943,38 @@ function updatePhysics() {
     ball.z += ball.vz * timeStep;
 
     // パスターゲットへのキャッチ判定
-    // パスインターセプト判定（ターゲットより先にチェック）
-    if(ball.passTarget !== null && ball.z < 60) {
+    // パスインターセプト判定（NBA 2K準拠：極めて厳格）
+    if(ball.passTarget !== null && ball.z < 60 && frameCount % 3 === 0) { // 3フレームに1回のみチェック
       // OPUS FIX: Safe pass target lookup
       let rcv = getPlayer(ball.passTarget);
       if(rcv) {
-        // パスルート上のディフェンダーを探す
-        let defenders = players.filter(d =>
-          d.team !== rcv.team &&
-          dist(d.x, d.y, ball.x, ball.y) < 25 && // ボールの近く
-          d.lock <= 0 // アクション可能
-        );
+        let passer = getPlayer(ball.passer);
+        let passerHandling = passer ? passer.handling : 50;
 
-        // インターセプト試行
+        // パスレーン上に直接いるディフェンダーのみ
+        let defenders = players.filter(d => {
+          if(d.team === rcv.team || d.lock > 0) return false;
+
+          let distToBall = dist(d.x, d.y, ball.x, ball.y);
+          if(distToBall > 15) return false; // 15ユニット以内（25→15に縮小）
+
+          // パスの進行方向にいるかチェック（NBA 2K準拠）
+          let ballToRcv = atan2(rcv.y - ball.y, rcv.x - ball.x);
+          let ballToDef = atan2(d.y - ball.y, d.x - ball.x);
+          let angleDiff = abs(ballToRcv - ballToDef);
+
+          // 進行方向の前方45度以内にいる必要がある
+          return angleDiff < PI / 4;
+        });
+
+        // インターセプト試行（極めて低確率）
         for(let defender of defenders) {
-          // OPUS FIX: Passer's handling skill protects against interception
-          let passer = getPlayer(ball.passer);
-          let passerHandling = passer ? passer.handling : 50; // Default 50 if passer not found
-
-          // インターセプト確率（低め）
-          let interceptChance = map(defender.stl, 0, 100, 0.005, 0.025); // 0.5-2.5%
+          // インターセプト確率（NBA 2K準拠：極めて低い）
+          let interceptChance = map(defender.stl, 0, 100, 0.0005, 0.003); // 0.05-0.3%（1/10に削減）
           interceptChance *= map(defender.height, 160, 230, 0.9, 1.1);
+          interceptChance *= map(defender.anticipation, 0, 100, 0.5, 1.5); // 予測力を考慮
           // High handling skill reduces interception chance significantly
-          interceptChance *= map(passerHandling, 0, 100, 1.5, 0.3);
+          interceptChance *= map(passerHandling, 0, 100, 2.0, 0.2); // より強力な保護
 
           if(random() < interceptChance) {
             // パスカット成功！
