@@ -256,6 +256,8 @@ function initPlayers() {
       speedMultiplier: SPEED_RUN,
       currentSpeed: 0, // 現在の速度（加速用）
       facingAngle: 0, // 向いている方向（ラジアン）
+      stableTargetX: null, // NBA 2K準拠：安定した目標位置（震え防止）
+      stableTargetY: null,
       moveTarget: null, actionQueue: [],
       // 戦略用
       isScreening: false, screenTarget: null, screenTimer: 0,
@@ -2104,7 +2106,11 @@ function updatePlayerAI(p) {
           defX = max(defX, 450);
         }
 
-        moveToward(p, defX, defY, speed*0.75);
+        // NBA 2K準拠：ディフェンス位置を安定化（震え防止）
+        // オンボールディフェンスはより反応的に（閾値小）、オフボールは安定的に（閾値大）
+        let threshold = mark && mark.hasBall ? 8 : 15;
+        let stableTarget = getStabilizedTarget(p, defX, defY, threshold);
+        moveToward(p, stableTarget.x, stableTarget.y, speed*0.75);
       }
     } else if(p.transitionDefense && p.transitionTimer > 0) {
       // トランジションディフェンス：素早く自陣へ戻る
@@ -2221,26 +2227,50 @@ function updatePlayerAI(p) {
   }
 }
 
+// NBA 2K準拠：目標位置の安定化（震え防止）
+function getStabilizedTarget(p, newTargetX, newTargetY, threshold = 12) {
+  // 初回または大きく変化した場合のみ更新
+  if (p.stableTargetX === null || p.stableTargetY === null) {
+    p.stableTargetX = newTargetX;
+    p.stableTargetY = newTargetY;
+    return { x: newTargetX, y: newTargetY };
+  }
+
+  let distToNewTarget = dist(p.stableTargetX, p.stableTargetY, newTargetX, newTargetY);
+
+  // 大きな変化があった場合のみ更新
+  if (distToNewTarget > threshold) {
+    p.stableTargetX = newTargetX;
+    p.stableTargetY = newTargetY;
+  }
+
+  return { x: p.stableTargetX, y: p.stableTargetY };
+}
+
 function moveToward(p, tx, ty, targetSpeed) {
   // OPUS FIX: Cannot change direction while jumping (realistic physics)
   if(p.isJumping && !p.hasBall) return; // Can't move while jumping (except ball handler)
   if(p.isJumping && p.hasBall) targetSpeed *= 0.1; // Minimal movement for ball handler
 
-  // 目標位置に十分近い場合は停止（震え防止）
+  // NBA 2K準拠：目標位置への到達判定を緩く（滑らかな動き）
   let distToTarget = dist(p.x, p.y, tx, ty);
-  if(distToTarget < 3) {
-    p.currentSpeed = 0;
-    return;
+  if(distToTarget < 8) { // 3 → 8（より寛容に）
+    // 完全停止ではなく、徐々に減速
+    targetSpeed *= 0.5;
+    if(distToTarget < 4) {
+      p.currentSpeed *= 0.8; // ゆっくり停止
+      return;
+    }
   }
-  // 選手同士の衝突判定（重なり防止）
+  // NBA 2K準拠：選手同士の衝突判定（滑らかに）
   for(let other of players) {
     if(other.id === p.id) continue;
     let d = dist(p.x, p.y, other.x, other.y);
-    let minDist = 35; // 最小距離拡大（スクリーン用）
+    let minDist = 30; // 35 → 30（少し近づける）
     if(d < minDist && d > 0) {
-      // 押し出し（衝突回避）
+      // NBA 2K準拠：ソフトな押し出し（震え防止）
       let pushAngle = atan2(p.y - other.y, p.x - other.x);
-      let pushForce = (minDist - d) * 0.3;
+      let pushForce = (minDist - d) * 0.15; // 0.3 → 0.15（半減）
       p.x += cos(pushAngle) * pushForce;
       p.y += sin(pushAngle) * pushForce;
       // コート内に制限
@@ -2257,9 +2287,9 @@ function moveToward(p, tx, ty, targetSpeed) {
     }
   }
 
-  // 瞬発力による滑らかな加速システム
-  // 瞬発力が高いほど早くトップスピードに到達
-  let accelerationRate = map(p.acceleration, 0, 100, 0.03, 0.15);
+  // NBA 2K準拠：瞬発力による滑らかな加速システム
+  // 瞬発力が高いほど早くトップスピードに到達（反応速度向上）
+  let accelerationRate = map(p.acceleration, 0, 100, 0.05, 0.20);
 
   // 現在の速度を目標速度に向けて調整
   if(p.currentSpeed < targetSpeed) {
@@ -2274,8 +2304,8 @@ function moveToward(p, tx, ty, targetSpeed) {
   let a = atan2(ty-p.y, tx-p.x);
   if(p.currentSpeed > 0.3) p.facingAngle = a; // 移動中のみ向きを更新
 
-  // 目標に近づくと自動的に減速（震え防止）
-  let dampingFactor = distToTarget < 20 ? map(distToTarget, 0, 20, 0.3, 1.0) : 1.0;
+  // NBA 2K準拠：目標に近づくと自動的に減速（震え防止、より広い範囲で滑らかに）
+  let dampingFactor = distToTarget < 40 ? map(distToTarget, 0, 40, 0.5, 1.0) : 1.0;
   let actualSpeed = p.currentSpeed * dampingFactor;
 
   // OPUS FIX: Allow out-of-bounds during ALL throw-in phases and loose balls
