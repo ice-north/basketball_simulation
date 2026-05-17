@@ -783,14 +783,17 @@ function findOpenTeammates(player) {
     !p.isJumping
   );
 
-  return teammates.filter(tm => {
-    const tmDef = findNearestDefender(tm);
-    return !tmDef || tmDef.distance > 60; // 60ユニット以上離れていればオープン
-  }).map(tm => ({
-    player: tm,
-    distance: dist(player.x, player.y, tm.x, tm.y),
-    openness: tmDef ? tmDef.distance : 100
-  }));
+  return teammates
+    .map(tm => {
+      const tmDef = findNearestDefender(tm);
+      return {
+        player: tm,
+        distance: dist(player.x, player.y, tm.x, tm.y),
+        openness: tmDef ? tmDef.distance : 100,
+        defenderDistance: tmDef ? tmDef.distance : 999
+      };
+    })
+    .filter(tm => tm.defenderDistance > 60); // 60ユニット以上離れていればオープン
 }
 
 // チームスペーシングを評価
