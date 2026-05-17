@@ -1732,8 +1732,8 @@ function updatePlayerAI(p) {
       // "Get open"調整を適用
       targetX += getOpenAdjustX;
       targetY += getOpenAdjustY;
-      // フロアバランス認識：チーム全体の配置を考慮
-      let teammates = players.filter(pl => pl.team === p.team && pl.id !== p.id && !pl.hasBall);
+      // フロアバランス認識：チーム全体の配置を考慮（既存のteammatesを更新）
+      teammates = players.filter(pl => pl.team === p.team && pl.id !== p.id && !pl.hasBall);
       let leftSide = teammates.filter(t => t.x < 500).length;
       let rightSide = teammates.filter(t => t.x >= 500).length;
       let topSide = teammates.filter(t => t.y < 388.75).length;
