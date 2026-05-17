@@ -796,17 +796,29 @@ function findOpenTeammates(player) {
     !p.isJumping
   );
 
+  const tg = getTargetGoal(player);
+  const passerToGoalDist = dist(player.x, player.y, tg.x, tg.y);
+
   return teammates
     .map(tm => {
       const tmDef = findNearestDefender(tm);
+      const targetToGoalDist = dist(tm.x, tm.y, tg.x, tg.y);
+
+      // NBA 2K準拠：バックパス（ゴールから遠ざかる）の味方を除外
+      const isBackwardPass = targetToGoalDist > passerToGoalDist + 30; // 30ユニット以上後ろ
+
       return {
         player: tm,
         distance: dist(player.x, player.y, tm.x, tm.y),
         openness: tmDef ? tmDef.distance : 100,
-        defenderDistance: tmDef ? tmDef.distance : 999
+        defenderDistance: tmDef ? tmDef.distance : 999,
+        isBackward: isBackwardPass
       };
     })
-    .filter(tm => tm.defenderDistance > 60); // 60ユニット以上離れていればオープン
+    .filter(tm =>
+      tm.defenderDistance > 60 && // 60ユニット以上離れていればオープン
+      !tm.isBackward // バックパスは除外
+    );
 }
 
 // チームスペーシングを評価
@@ -930,6 +942,25 @@ function evaluatePassOptions(passer, situation) {
   return openTeammates.map(tm => {
     let value = 50;
 
+    // NBA 2K準拠：バックパスを大幅に削減
+    // 前方（ゴール方向）のパスのみを優先
+    const tg = getTargetGoal(passer);
+    let passerToGoalDist = dist(passer.x, passer.y, tg.x, tg.y);
+    let targetToGoalDist = dist(tm.player.x, tm.player.y, tg.x, tg.y);
+
+    // パス先がゴールに近い方が価値が高い
+    let progressValue = (passerToGoalDist - targetToGoalDist);
+
+    // バックパスに厳しいペナルティ（ゴールから遠ざかる）
+    if(progressValue < -20) {
+      value -= 100; // 大幅に減点
+    } else if(progressValue < 0) {
+      value -= 50; // 小さなバックパスも減点
+    } else {
+      // 前方パスにボーナス
+      value += progressValue * 0.5;
+    }
+
     // オープン度を評価
     value += tm.openness * 0.3;
 
@@ -939,17 +970,15 @@ function evaluatePassOptions(passer, situation) {
     value -= distancePenalty;
 
     // ターゲットゴールに近いほど価値が高い
-    const tg = getTargetGoal(passer);
-    let targetDistance = dist(tm.player.x, tm.player.y, tg.x, tg.y);
-    value += map(targetDistance, 0, 500, 50, 0);
+    value += map(targetToGoalDist, 0, 500, 50, 0);
 
     // シューターへのパスは価値が高い
-    if (tm.player.position === "SG" && targetDistance > 180 && targetDistance < 250) {
+    if (tm.player.position === "SG" && targetToGoalDist > 180 && targetToGoalDist < 250) {
       value += 20;
     }
 
     // ポストプレイヤーへのエントリーパス
-    if ((tm.player.position === "C" || tm.player.position === "PF") && targetDistance < 120) {
+    if ((tm.player.position === "C" || tm.player.position === "PF") && targetToGoalDist < 120) {
       value += 15;
     }
 
@@ -960,7 +989,7 @@ function evaluatePassOptions(passer, situation) {
       requiresVision: true,
       isSafe: isPassSafe(passer, tm.player)
     };
-  }).filter(opt => opt.isSafe); // 安全なパスのみ
+  }).filter(opt => opt.isSafe && opt.baseValue > 0); // 安全で価値が正のパスのみ
 }
 
 // === ディフェンスAI機能 ===
@@ -1417,6 +1446,27 @@ function updatePlayerAI(p) {
       return; // フェイク中は他のアクションをしない
     }
 
+    // NBA 2K準拠：ボール運び中は前進のみ（パス禁止）
+    if(p.bringingBallUp) {
+      p.speedMultiplier = SPEED_RUN;
+      let avoidX = 0, avoidY = 0;
+      players.filter(d=>d.team!==p.team).forEach(d => {
+        let dd = dist(p.x,p.y,d.x,d.y);
+        if(dd < 55 && dd > 0) { avoidX += (p.x-d.x)/dd*2.5; avoidY += (p.y-d.y)/dd*2.5; }
+      });
+      let targetX = tg.x + avoidX*12;
+      let targetY = tg.y + avoidY*12;
+
+      // ハーフコートを越えたらbringingBallUpを解除
+      if((p.team === "PlayerTeam" && p.x > HALF_COURT_X + 50) ||
+         (p.team === "DefenderTeam" && p.x < HALF_COURT_X - 50)) {
+        p.bringingBallUp = false;
+      }
+
+      moveToward(p, targetX, targetY, speed);
+      return; // ボール運び中は他の判断をしない
+    }
+
     // 新しいAI意思決定システム：ゲーム状況を評価
     let situation = evaluateGameSituation(p);
     let dToGoal = situation.distanceToBasket;
@@ -1431,14 +1481,15 @@ function updatePlayerAI(p) {
     let heavyPressure = closestDef && dist(p.x, p.y, closestDef.x, closestDef.y) < 35;
 
     if(heavyPressure && !p.pressureEscaping) {
-      // Option 1: Find safe pass (preferred)
+      // NBA 2K準拠：前方の味方のみ考慮（バックパス禁止）
       let safeTeammates = teammates.filter(t => {
         let defDist = dist(t.x, t.y, closestDef.x, closestDef.y);
-        return defDist > 80 && isPassSafe(p, t);
+        let isForward = p.team === "PlayerTeam" ? t.x > p.x : t.x < p.x;
+        return defDist > 80 && isPassSafe(p, t) && isForward;
       });
 
       if(safeTeammates.length > 0 && random() < 0.7) {
-        // Emergency pass to open teammate
+        // Emergency pass to open teammate (forward only)
         let target = safeTeammates.sort((a,b) =>
           dist(b.x, b.y, closestDef.x, closestDef.y) - dist(a.x, a.y, closestDef.x, closestDef.y))[0];
         passTo(p, target);
@@ -1512,7 +1563,14 @@ function updatePlayerAI(p) {
       let cuttingMate = teammates.find(t => t.isCutting && dist(p.x, p.y, t.x, t.y) < 250);
       if(cuttingMate && isPassSafe(p, cuttingMate)) { passTo(p, cuttingMate); return; }
       if(bestPass && isPassSafe(p, bestPass)) { passTo(p, bestPass); return; }
-      let nearest = teammates.sort((a,b) => dist(p.x,p.y,a.x,a.y) - dist(p.x,p.y,b.x,b.y))[0];
+
+      // NBA 2K準拠：前方の味方を優先（バックパス禁止）
+      let forwardTeammates = teammates.filter(t => {
+        let isForward = p.team === "PlayerTeam" ? t.x > p.x - 30 : t.x < p.x + 30;
+        return isForward;
+      });
+      let nearest = (forwardTeammates.length > 0 ? forwardTeammates : teammates)
+        .sort((a,b) => dist(p.x,p.y,a.x,a.y) - dist(p.x,p.y,b.x,b.y))[0];
       if(nearest && isPassSafe(p, nearest)) { passTo(p, nearest); return; }
     }
 
@@ -1613,8 +1671,10 @@ function updatePlayerAI(p) {
     if(outnumbered && dToGoal > 150) {
       p.speedMultiplier = SPEED_JOG;
       if(bestPass && isPassSafe(p, bestPass)) { passTo(p, bestPass); return; }
-      let waitX = p.team === "PlayerTeam" ? p.x - 15 : p.x + 15;
-      moveToward(p, waitX, p.y, speed * 0.4);
+      // NBA 2K準拠：バックパス禁止、横方向に移動
+      let waitX = p.x + (random() > 0.5 ? 15 : -15); // 横方向
+      let waitY = p.y + (random() > 0.5 ? 20 : -20); // 少し縦にも移動
+      moveToward(p, waitX, waitY, speed * 0.4);
       return;
     }
 
