@@ -263,7 +263,9 @@ function initPlayers() {
       isScreening: false, screenTarget: null, screenTimer: 0,
       isCutting: false, cutTarget: null, cutType: null,
       isBoxingOut: false, boxOutTarget: null,
-      helpDefense: false, helpTarget: null
+      helpDefense: false, helpTarget: null,
+      // NBA 2K準拠：フェイクシステム
+      isFaking: false, fakeTimer: 0, lastMoveAngle: 0, baitedByFake: false
     };
   }
 }
@@ -1300,7 +1302,7 @@ function updatePlayerAI(p) {
       let target = openTeammates.length > 0 ? 
         openTeammates.sort((a,b) => dist(p.x,p.y,a.x,a.y) - dist(p.x,p.y,b.x,b.y))[0] :
         teammates.sort((a,b) => dist(p.x,p.y,a.x,a.y) - dist(p.x,p.y,b.x,b.y))[0];
-      if(target && dist(p.x, p.y, target.x, target.y) < 250 && throwInState.timer > 90) {
+      if(target && dist(p.x, p.y, target.x, target.y) < 250 && throwInState.timer > 20) {
         if(isPassSafe(p, target)) {
           // スローイン専用のパス処理
           let d = dist(p.x, p.y, target.x, target.y);
@@ -1314,8 +1316,8 @@ function updatePlayerAI(p) {
           throwInState = null; // スローイン完了
           return;
         }
-      } else if(throwInState.timer > 180) {
-        // 3秒経過：強制的にスローイン（安全性無視）
+      } else if(throwInState.timer > 60) {
+        // 1秒経過：強制的にスローイン（安全性無視）
         if(target && dist(p.x, p.y, target.x, target.y) < 300) {
           let d = dist(p.x, p.y, target.x, target.y);
           let spd = 7, t = d / spd;
@@ -1401,6 +1403,19 @@ function updatePlayerAI(p) {
 
   if(p.hasBall && p.lock <= 0) {
     p.state = "offense";
+
+    // NBA 2K準拠：シュートフェイク後の処理
+    if(p.isFaking && p.fakeTimer > 0) {
+      p.fakeTimer--;
+      // フェイク中は停止（ディフェンスの反応を待つ）
+      if(p.fakeTimer <= 0) {
+        p.isFaking = false;
+        p.isJumping = false; // 着地
+        // フェイク成功後：ディフェンスが反応したら優位を得る
+        // 次のフレームで通常判断に戻る
+      }
+      return; // フェイク中は他のアクションをしない
+    }
 
     // 新しいAI意思決定システム：ゲーム状況を評価
     let situation = evaluateGameSituation(p);
@@ -1537,9 +1552,27 @@ function updatePlayerAI(p) {
     shootChance *= map(p.decisions, 0, 100, 0.85, 1.15); // 0.7,1.3 → 0.85,1.15
 
     if(dToGoal < shootDist && random() < shootChance && !p.isJumping) {
-      p.isJumping = true; p.mustShoot = true;
-      p.vz = sqrt(2 * map(p.jmp,0,100,50,100) * (BALL_GRAVITY * 0.5));
-      return;
+      // NBA 2K準拠：シュートフェイクの実装
+      // BBIQが高く、ディフェンスが近い場合、時々フェイクを使う
+      let nearDefender = players.find(d => d.team !== p.team && dist(d.x, d.y, p.x, p.y) < 45);
+      let offensiveIQ = p.decisions;
+      let shouldFake = nearDefender && random() < map(offensiveIQ, 0, 100, 0.05, 0.25) && shotQuality < 60;
+
+      if(shouldFake) {
+        // シュートフェイク：ジャンプするがシュートしない
+        p.isJumping = true;
+        p.isFaking = true; // フェイク中フラグ
+        p.fakeTimer = 20; // フェイク時間（約0.3秒）
+        p.vz = sqrt(2 * map(p.jmp,0,100,50,100) * (BALL_GRAVITY * 0.5)) * 0.6; // 低めのジャンプ
+        addFloatingText(p.x, p.y - 50, "PUMP FAKE!", [100, 255, 100]);
+        return;
+      } else {
+        // 実際のシュート
+        p.isJumping = true;
+        p.mustShoot = true;
+        p.vz = sqrt(2 * map(p.jmp,0,100,50,100) * (BALL_GRAVITY * 0.5));
+        return;
+      }
     }
 
     // ③速攻：前方のフリーな味方にロングパス
@@ -1592,7 +1625,19 @@ function updatePlayerAI(p) {
       let dd = dist(p.x,p.y,d.x,d.y);
       if(dd < 55 && dd > 0) { avoidX += (p.x-d.x)/dd*2.5; avoidY += (p.y-d.y)/dd*2.5; }
     });
-    moveToward(p, tg.x + avoidX*12, tg.y + avoidY*12, speed);
+
+    // バックコートバイオレーション回避：ハーフコートを越えた後は戻らない
+    let targetX = tg.x + avoidX*12;
+    let targetY = tg.y + avoidY*12;
+    if(ballCrossedHalfCourt) {
+      // ハーフコートを越えた後は、攻撃側ハーフに留まる
+      if(p.team === "PlayerTeam") {
+        targetX = max(targetX, HALF_COURT_X + 20); // ハーフコートより前方のみ
+      } else {
+        targetX = min(targetX, HALF_COURT_X - 20); // ハーフコートより前方のみ
+      }
+    }
+    moveToward(p, targetX, targetY, speed);
   } else if(isOffense && p.lock <= 0) {
     p.state = "support";
     p.speedMultiplier = SPEED_JOG; // オフェンスサポートは小走り
@@ -2040,11 +2085,39 @@ function updatePlayerAI(p) {
             p.speedMultiplier = SPEED_JOG;
           }
 
-          // コンテスト範囲内でジャンプシュートの場合はジャンプして妨害
+          // NBA 2K準拠：フェイクに引っかかるディフェンス
+          // 予測力と判断力が低いディフェンスは、オフェンスのモーションに過剰反応
+          let defensiveIQ = (p.anticipation + p.decisions) / 2;
+          let fakeReactionChance = map(defensiveIQ, 0, 100, 0.85, 0.15); // IQ低いほど引っかかる
+
+          // シュートモーション検出：実際のシュートでなくてもジャンプしてしまう
           if(onBallDef.shouldContest && mark.isJumping && !p.isJumping && distToMark < 40) {
-            p.isJumping = true;
-            p.vz = sqrt(2 * map(p.jmp, 0, 100, 30, 70) * BALL_GRAVITY * 0.5);
+            // 実際のシュート（mustShoot=true）なら必ず反応、フェイクなら確率的に反応
+            let isRealShot = mark.mustShoot;
+            if(isRealShot || random() < fakeReactionChance) {
+              p.isJumping = true;
+              p.vz = sqrt(2 * map(p.jmp, 0, 100, 30, 70) * BALL_GRAVITY * 0.5);
+              if(!isRealShot && random() < 0.3) {
+                addFloatingText(p.x, p.y - 30, "FOOLED!", [255, 180, 100]);
+              }
+            }
           }
+
+          // ドリブルフェイク検出：オフェンスの急激な方向転換に反応
+          if(!mark.lastMoveAngle) mark.lastMoveAngle = mark.facingAngle;
+          let angleChange = abs(mark.facingAngle - mark.lastMoveAngle);
+          if(angleChange > PI / 3 && distToMark < 50) { // 60度以上の方向転換
+            // IQが低いディフェンスは、フェイント方向に引っ張られる
+            if(random() < fakeReactionChance * 0.7) {
+              let fakeDirection = mark.lastMoveAngle;
+              let pullX = cos(fakeDirection) * 15;
+              let pullY = sin(fakeDirection) * 15;
+              defX += pullX;
+              defY += pullY;
+              if(random() < 0.3) addFloatingText(p.x, p.y - 30, "FOOLED!", [255, 180, 100]);
+            }
+          }
+          mark.lastMoveAngle = mark.facingAngle;
 
           // スティール試行
           if(distToMark < 30 && random(100) < p.stl * 0.03 && p.lock <= 0) {
@@ -2825,8 +2898,15 @@ function startThrowIn(team, x, y, reason) {
     throwInState = null;
     return;
   }
-  throwInState = { team, x, y, reason, phase: "fetching", startTime: frameCount, thrower: thrower ? thrower.id : (team==="PlayerTeam"?0:5) };
-  throwInState.ballX = ball.x; throwInState.ballY = ball.y; // ボール位置を保存（回収用）
+
+  // NBA 2K準拠：スローインを即座に開始（フェッチ・移動をスキップ）
+  thrower.x = x;
+  thrower.y = constrain(y, 260, 550); // コート内に配置
+  ball.x = x;
+  ball.y = thrower.y;
+  ball.z = 60; // 手に持っている高さ
+
+  throwInState = { team, x, y, reason, phase: "ready", startTime: frameCount, thrower: thrower ? thrower.id : (team==="PlayerTeam"?0:5), timer: 0 };
   ball.vx = 0; ball.vy = 0; ball.vz = 0;
   ball.reboundClaimed = false; // OPUS FIX
 }
