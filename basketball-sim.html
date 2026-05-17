@@ -72,6 +72,20 @@ function getPlayer(id) {
   return isValidPlayerId(id) ? players[id] : null;
 }
 
+// Get target goal for a player (offensive goal)
+function getTargetGoal(player) {
+  return player.team === "PlayerTeam" ?
+    {x: finalGoal.ringX, y: finalGoal.ringY} :
+    {x: 1000 - finalGoal.ringX, y: finalGoal.ringY};
+}
+
+// Get own goal for a player (defensive goal)
+function getOwnGoal(player) {
+  return player.team === "PlayerTeam" ?
+    {x: 1000 - finalGoal.ringX, y: finalGoal.ringY} :
+    {x: finalGoal.ringX, y: finalGoal.ringY};
+}
+
 // Safe distance calculation with epsilon
 function safeDist(x1, y1, x2, y2) {
   let dx = x2 - x1;
