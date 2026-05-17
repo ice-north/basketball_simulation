@@ -121,6 +121,13 @@ let foulState = null; // {shooter: id, foulCount, team, attempts: 2/3}
 let teamFouls = {PlayerTeam: 0, DefenderTeam: 0}; // チームファウル数
 let playerFouls = {}; // 個人ファウル {playerId: count}
 
+// バックコートバイオレーション追跡
+let ballCrossedHalfCourt = false; // ボールがハーフコートを越えたか
+const HALF_COURT_X = 500; // ハーフコートのX座標
+
+// ディフェンスシステム（明確なマンツーマン）
+let defensiveAssignments = {}; // {defenderId: offensivePlayerId}
+
 // AI設定パラメータ
 const AI_CONFIG = {
   // 意思決定
@@ -154,6 +161,8 @@ function setup() {
   ball = {x:500,y:388.75,z:0,vx:0,vy:0,vz:0,trail:[],lastTouch:"PlayerTeam",passTarget:null};
   // ファウルカウント初期化
   for(let p of players) playerFouls[p.id] = 0;
+  // マンツーマンディフェンス割り当て初期化
+  assignManToManDefense();
   buildRosterUI();
   startJumpBall(); // ゲーム開始時はジャンプボール
 }
@@ -1979,8 +1988,12 @@ function updatePlayerAI(p) {
       }
 
       p.speedMultiplier = SPEED_JOG; // マークは小走り
-      // 同じポジションの相手選手をマーク
-      let mark = players.filter(t=>t.team!==p.team)[p.id%5];
+      // マンツーマンディフェンス：明確な割り当て
+      let mark = getManToManAssignment(p);
+      if (!mark) {
+        // フォールバック：同ポジションをマーク
+        mark = players.filter(t=>t.team!==p.team)[p.id%5];
+      }
 
       // ポストディフェンス：押し返し
       if(mark && mark.postingUp) {
@@ -2586,6 +2599,73 @@ function checkFoul(defender, offender) {
   return false;
 }
 
+// ポゼッション変更処理（バックコート状態リセット＋マンツーマン割り当て）
+function changePossession(newTeam) {
+  possession = newTeam;
+  shotClock = 24;
+  ballCrossedHalfCourt = false; // バックコート状態をリセット
+
+  // マンツーマンディフェンス割り当て
+  assignManToManDefense();
+}
+
+// マンツーマンディフェンス割り当て
+function assignManToManDefense() {
+  // 各ディフェンダーに対応するオフェンスプレイヤーを割り当て
+  // ポジションマッチング: PG→PG, SG→SG, SF→SF, PF→PF, C→C
+  defensiveAssignments = {};
+
+  let playerTeam = players.filter(p => p.team === "PlayerTeam");
+  let defenderTeam = players.filter(p => p.team === "DefenderTeam");
+
+  // 各ポジションで対応させる
+  positions.forEach(pos => {
+    let offensive = playerTeam.find(p => p.position === pos);
+    let defensive = defenderTeam.find(p => p.position === pos);
+
+    if (offensive && defensive) {
+      defensiveAssignments[defensive.id] = offensive.id;
+      defensiveAssignments[offensive.id + 5] = defensive.id - 5; // 逆方向も記録
+    }
+  });
+}
+
+// マンツーマン割り当てを取得
+function getManToManAssignment(defender) {
+  let assignedOffensiveId = defensiveAssignments[defender.id];
+  return assignedOffensiveId !== undefined ? players[assignedOffensiveId] : null;
+}
+
+// バックコートバイオレーションチェック
+function checkBackcourtViolation(holder) {
+  if (!holder || !possession) return;
+
+  // オフェンス側のハーフコート判定
+  let offensiveHalfCourt = holder.team === "PlayerTeam" ? HALF_COURT_X : HALF_COURT_X;
+  let inOffensiveHalf = holder.team === "PlayerTeam" ? ball.x > offensiveHalfCourt : ball.x < offensiveHalfCourt;
+  let inDefensiveHalf = holder.team === "PlayerTeam" ? ball.x < offensiveHalfCourt : ball.x > offensiveHalfCourt;
+
+  // ボールが攻撃側ハーフに入ったら記録
+  if (inOffensiveHalf && !ballCrossedHalfCourt) {
+    ballCrossedHalfCourt = true;
+  }
+
+  // ハーフコートを越えた後に守備側ハーフに戻ったらバイオレーション
+  if (ballCrossedHalfCourt && inDefensiveHalf) {
+    // バックコートバイオレーション！
+    holder.hasBall = false;
+    let newTeam = holder.team === "PlayerTeam" ? "DefenderTeam" : "PlayerTeam";
+    possession = newTeam;
+    shotClock = 24;
+    ballCrossedHalfCourt = false;
+
+    // バイオレーション発生位置でスローイン
+    let throwInX = HALF_COURT_X + (newTeam === "PlayerTeam" ? -50 : 50);
+    startThrowIn(newTeam, throwInX, ball.y, "BACKCOURT VIOLATION");
+    addFloatingText(ball.x, ball.y - 40, "BACKCOURT!", [255, 100, 100]);
+  }
+}
+
 // ファウル処理
 function commitFoul(fouler, victim, type) {
   playerFouls[fouler.id] = (playerFouls[fouler.id] || 0) + 1;
@@ -2606,6 +2686,9 @@ function commitFoul(fouler, victim, type) {
     startThrowIn(newTeam, fouler.team === "PlayerTeam" ? 937.5 : 62.5, 406.25, "OFFENSIVE FOUL");
     addFloatingText(fouler.x, fouler.y - 40, "CHARGE!", [255, 100, 100]);
   }
+
+  // バックコートバイオレーション状態をリセット
+  ballCrossedHalfCourt = false;
 
   // 5ファウルで退場
   if(playerFouls[fouler.id] >= 5) {
@@ -2927,6 +3010,9 @@ function updatePhysics() {
     ball.x = holder.x + dribbleOffsetX; ball.y = holder.y + dribbleOffsetY;
     ball.z = holder.z + 45 - dZ;
     ball.vx = 0; ball.vy = 0; ball.vz = 0; ball.passTarget = null; ball.lastTouch = holder.team;
+
+    // バックコートバイオレーションチェック
+    checkBackcourtViolation(holder);
   } else {
     // 重力の適用 - enhanced with realistic bounce factor
     ball.vz -= BALL_GRAVITY * 0.5 * (ball.z > 0 ? 1.0 : 0.8); // Less gravity when bouncing
